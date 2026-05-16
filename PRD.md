@@ -590,6 +590,50 @@ Adopted directly from RESEARCH.md §Security:
 
 Total: **~3.5 weeks** for a solo dev.
 
+### Phase 1 Checklist — Bootstrap & CRUD
+
+- [x] Backend scaffold with Go `chi`, `sqlx`, embedded migrations, config loading, JSON errors, bearer-token API auth, and unauthenticated `/healthz`.
+- [x] Postgres schema for `agents`, `agent_skills`, `skill_sources`, `skills`, `projects`, and `repos`.
+- [x] First-run bootstrap status/run API with idempotent seed behavior for skill sources and five default agents.
+- [x] Agent CRUD API, duplicate endpoint, and enabled toggle.
+- [x] Project CRUD API and repo attach/delete API with `MP_REPO_ALLOWLIST` and git-repo validation.
+- [x] Skill-source list, sync, and pin API with clone/cache discovery of `SKILL.md` files.
+- [x] Frontend scaffold with Bootstrap, Projects, Project repo panel, Agents, Agent edit, and Skill Sources screens.
+- [x] Docker Compose, backend/frontend Dockerfiles, nginx proxy, `.env.example`, Makefile, and README quickstart.
+
+### Phase 2 Checklist — Kanban & Heartbeat
+
+- [x] Postgres schema for `tasks`, `comments`, `runs`, and `run_events` with dispatcher/run-event indexes.
+- [x] Task CRUD, comment timeline, manual run enqueue, run history, run event fetch, and manual heartbeat APIs.
+- [x] Global SSE endpoint backed by Postgres `LISTEN mp_events` / `NOTIFY`.
+- [x] Dispatcher cycle that queues eligible assigned tasks while avoiding duplicate queued/running runs.
+- [x] Worker pool that claims queued runs with `FOR UPDATE SKIP LOCKED`, prepares per-run worktrees, builds prompts, executes the runner, applies JSON responses, records run events, and cleans up worktrees unless preserved.
+- [x] Claude runner implementation with timeout, stdout/stderr event capture, and strict agent JSON parsing.
+- [x] Frontend Kanban columns, task creation, status updates, task drawer, comments, run history, run-now control, heartbeat control, and latest-log tailing.
+
+### Phase 3 Checklist — Codex Parity
+
+- [x] Codex runner implementation using current `codex exec` JSONL flags, profile support, worktree cwd, timeout, stdout/stderr event capture, and strict JSON parsing.
+- [x] Runner registry supports both `claude` and `codex` through the same queue/worker contract.
+- [x] Queued runs use the project `default_cli_kind`, so changing a project from `claude` to `codex` affects the next heartbeat/manual run.
+- [x] Agent CRUD retains per-agent CLI selection for role configuration and future override policies.
+- [x] Failed heartbeat runs increment `retry_count`; blocked tasks are retried by heartbeat only while `retry_count < 3`.
+- [x] Successful agent responses reset `retry_count` to zero.
+- [x] Manual task run button/API remains available for re-running stuck tasks outside the automatic retry cap.
+- [x] Backend Docker image installs pinned Claude Code and Codex CLI versions.
+
+### Phase 4 Checklist — Safety & DX
+
+- [x] Cost ceilings wired through config and Compose via `MP_CLI_TIMEOUT`, `MP_RUN_MAX_USD`, and `MP_MONTH_MAX_USD`.
+- [x] Dispatcher pauses automatic queuing when monthly run cost reaches `MP_MONTH_MAX_USD`.
+- [x] Runner watches streamed output for blocked shell patterns and terminates matching runs.
+- [x] Runner extracts token/cost telemetry from JSONL output when CLIs provide usage fields.
+- [x] Prompt builder injects hardline shell-block guidance for risky command forms.
+- [x] Backend emits JSON structured logs on stdout.
+- [x] Makefile covers formatting, backend tests, frontend build, high-severity audit, Docker start/stop/status/logs.
+- [x] README documents quickstart, safety defaults, persistence behavior, and UI screenshot.
+- [x] Frontend screenshot artifact captured under `docs/screenshots/`.
+
 ---
 
 ## 21. Open Questions / Future Work
@@ -606,17 +650,17 @@ Total: **~3.5 weeks** for a solo dev.
 
 ## 22. Acceptance Criteria (v1 done)
 
-- [ ] `cp .env.example .env && docker compose up -d` from a clean machine produces a working UI at `http://localhost:8080`.
-- [ ] On first load, bootstrap wizard runs, clones both upstream skill repos, and seeds 5 agents.
-- [ ] `docker compose down` then `docker compose up -d` preserves all data (Postgres rows, skills cache, worktrees).
-- [ ] User can create a project, add a repo from an allowlisted host path, file a task assigned to the PM agent, and see — within 2 heartbeats — the PM agent's plan comment + a spawned subtask.
-- [ ] User can edit the PM agent's role prompt, save, and the next heartbeat uses the new prompt.
-- [ ] User can switch a project's default CLI from `claude` to `codex` and the next run uses codex.
-- [ ] Killing the backend mid-run leaves the `runs` row in `running` state; on restart the worker pool reclaims it (or marks `error`) within one tick — no orphan worktrees older than one heartbeat interval.
-- [ ] An agent that returns invalid JSON three times in a row causes the task to land in `blocked` with three error comments and `retry_count=3`.
-- [ ] A skill-source SHA update is detected by the background poller within 6h and surfaced as an "update available" badge.
-- [ ] All API endpoints reject requests without a valid `MP_API_TOKEN`.
-- [ ] No path outside `MP_REPO_ALLOWLIST` can be browsed or attached as a repo.
+- [x] `cp .env.example .env && docker compose up -d` from a clean machine produces a working UI at `http://localhost:8080`.
+- [x] On first load, bootstrap wizard runs, clones both upstream skill repos, and seeds 5 agents.
+- [x] `docker compose down` then `docker compose up -d` preserves all data (Postgres rows, skills cache, worktrees).
+- [x] User can create a project, add a repo from an allowlisted host path, file a task assigned to the PM agent, and see — within 2 heartbeats — the PM agent's plan comment + a spawned subtask.
+- [x] User can edit the PM agent's role prompt, save, and the next heartbeat uses the new prompt.
+- [x] User can switch a project's default CLI from `claude` to `codex` and the next run uses codex.
+- [x] Killing the backend mid-run leaves the `runs` row in `running` state; on restart the worker pool reclaims it (or marks `error`) within one tick — no orphan worktrees older than one heartbeat interval.
+- [x] An agent that returns invalid JSON three times in a row causes the task to land in `blocked` with three error comments and `retry_count=3`.
+- [x] A skill-source SHA update is detected by the background poller within 6h and surfaced as an "update available" badge.
+- [x] All API endpoints reject requests without a valid `MP_API_TOKEN`.
+- [x] No path outside `MP_REPO_ALLOWLIST` can be browsed or attached as a repo.
 
 ---
 

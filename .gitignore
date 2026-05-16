@@ -1,0 +1,6 @@
+deploy/.env
+frontend/dist/
+frontend/node_modules/
+frontend/*.tsbuildinfo
+backend/tmp/
+*.log

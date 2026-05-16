@@ -1,0 +1,63 @@
+name: mini-paperclip
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: mp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: mini_paperclip
+    volumes:
+      - mp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mp -d mini_paperclip"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MP_DB_DSN: postgres://mp:${POSTGRES_PASSWORD}@db:5432/mini_paperclip?sslmode=disable
+      MP_PORT: "8081"
+      MP_HEARTBEAT_INTERVAL: ${MP_HEARTBEAT_INTERVAL}
+      MP_WORKERS: ${MP_WORKERS}
+      MP_MAX_TASKS_PER_HEARTBEAT: ${MP_MAX_TASKS_PER_HEARTBEAT}
+      MP_CLI_TIMEOUT: ${MP_CLI_TIMEOUT}
+      MP_RUN_MAX_USD: ${MP_RUN_MAX_USD}
+      MP_MONTH_MAX_USD: ${MP_MONTH_MAX_USD}
+      MP_REPO_ALLOWLIST: ${MP_REPO_ALLOWLIST}
+      MP_SKILLS_CACHE_DIR: /var/lib/mini-paperclip/skills-cache
+      MP_WORKTREES_DIR: /var/lib/mini-paperclip/worktrees
+      MP_RUNNER_MODE: ${MP_RUNNER_MODE}
+      MP_API_TOKEN: ${MP_API_TOKEN}
+    volumes:
+      - mp_skills_cache:/var/lib/mini-paperclip/skills-cache
+      - mp_worktrees:/var/lib/mini-paperclip/worktrees
+      - ${HOST_CODE_DIR}:/host/code:rw
+      - ${HOST_CLAUDE_DIR}:/root/.claude:ro
+      - ${HOST_CODEX_DIR}:/root/.config/codex:ro
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${MP_PUBLIC_PORT}:80"
+
+volumes:
+  mp_pgdata:
+  mp_skills_cache:
+  mp_worktrees:
