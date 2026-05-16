@@ -58,6 +58,7 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Get("/tasks/{id}/runs", api.listRuns)
 		r.Get("/runs/{id}", api.getRun)
 		r.Get("/runs/{id}/events", api.listRunEvents)
+		r.Get("/skills", api.listInstalledSkills)
 		r.Get("/skill-sources", api.listSkillSources)
 		r.Post("/skill-sources/{id}/sync", api.syncSkillSource)
 		r.Post("/skill-sources/{id}/pin", api.pinSkillSource)
@@ -208,6 +209,11 @@ func (a *API) browseFS(w http.ResponseWriter, r *http.Request) {
 func (a *API) listSkillSources(w http.ResponseWriter, r *http.Request) {
 	sources, err := a.store.ListSkillSources(r.Context())
 	respond(w, sources, err)
+}
+
+func (a *API) listInstalledSkills(w http.ResponseWriter, r *http.Request) {
+	skills, err := a.store.ListInstalledSkills(r.Context())
+	respond(w, skills, err)
 }
 
 func (a *API) syncSkillSource(w http.ResponseWriter, r *http.Request) {

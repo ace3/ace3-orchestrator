@@ -8,6 +8,7 @@ import {
   Project,
   Run,
   RunEvent,
+  Skill,
   SkillSource,
   Task,
   addComment,
@@ -25,6 +26,7 @@ import {
   heartbeat,
   listAgents,
   listComments,
+  listInstalledSkills,
   listProjects,
   listRunEvents,
   listRuns,
@@ -292,10 +294,16 @@ function AgentsPage() {
 
 function SkillSourcesPage() {
   const [sources, setSources] = useState<SkillSource[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [sha, setSha] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
-  async function refresh() { setSources(await listSkillSources()); }
+  async function refresh() {
+    const [nextSources, nextSkills] = await Promise.all([listSkillSources(), listInstalledSkills()]);
+    setSources(nextSources);
+    setSkills(nextSkills);
+  }
   useEffect(() => { refresh().catch((e) => setError(e.message)); }, []);
+  const sourceNames = useMemo(() => Object.fromEntries(sources.map((source) => [source.id, source.name])), [sources]);
 
   return <Panel title="Skill Sources">
     <Error text={error} />
@@ -309,6 +317,28 @@ function SkillSourcesPage() {
         <button onClick={async () => { await pinSkillSource(source.id, sha[source.id]); await refresh(); }}>Pin</button>
       </div>
     </article>)}</div>
+    <h2 className="section-title">Installed Skills</h2>
+    {skills.length === 0 ? <p className="empty-state">No installed skills yet. Sync a skill source to discover active skills.</p> :
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Skill</th>
+              <th>Source</th>
+              <th>Path</th>
+              <th>Version</th>
+            </tr>
+          </thead>
+          <tbody>
+            {skills.map((skill) => <tr key={skill.id}>
+              <td>{skill.name}</td>
+              <td>{sourceNames[skill.source_id] || skill.source_id}</td>
+              <td>{skill.path_in_source}</td>
+              <td>{skill.version || "n/a"}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>}
   </Panel>;
 }
 

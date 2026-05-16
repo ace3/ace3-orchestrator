@@ -14,6 +14,7 @@ export type Skill = {
   source_id: string;
   name: string;
   path_in_source: string;
+  version: string;
   archived: boolean;
 };
 
@@ -143,6 +144,7 @@ export const runTask = (taskId: string) => api<Run>(`/tasks/${taskId}/run`, { me
 export const listRuns = (taskId: string) => api<Run[]>(`/tasks/${taskId}/runs`);
 export const listRunEvents = (runId: string, since = 0) => api<RunEvent[]>(`/runs/${runId}/events?since=${since}`);
 export const heartbeat = () => api<{ queued: number }>("/heartbeat", { method: "POST" });
+export const listInstalledSkills = () => api<Skill[]>("/skills");
 export const listSkillSources = () => api<SkillSource[]>("/skill-sources");
 export const syncSkillSource = (id: string) => api<SkillSource>(`/skill-sources/${id}/sync`, { method: "POST" });
 export const pinSkillSource = (id: string, sha: string) => api<SkillSource>(`/skill-sources/${id}/pin`, { method: "POST", body: JSON.stringify({ sha }) });
