@@ -28,7 +28,7 @@ func main() {
 		slog.Error("migrate db failed", "error", err)
 		os.Exit(1)
 	}
-	st := store.New(conn, cfg.RepoAllowlist)
+	st := store.New(conn, cfg.RepoAllowlist, cfg.RepoPathAliases...)
 	bs := bootstrap.New(st, cfg.SkillsCacheDir)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

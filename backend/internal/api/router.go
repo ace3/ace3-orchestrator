@@ -203,7 +203,7 @@ func (a *API) browseFS(w http.ResponseWriter, r *http.Request) {
 	if path == "" && len(a.cfg.RepoAllowlist) > 0 {
 		path = a.cfg.RepoAllowlist[0]
 	}
-	entries, err := fsutil.Browse(path, a.cfg.RepoAllowlist)
+	entries, err := fsutil.BrowseWithAliases(path, a.cfg.RepoAllowlist, a.cfg.RepoPathAliases)
 	respond(w, map[string]any{"path": path, "entries": entries}, err)
 }
 

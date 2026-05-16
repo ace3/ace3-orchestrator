@@ -5,40 +5,59 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"mini-paperclip/backend/internal/fsutil"
 )
 
 type Config struct {
-	DBDSN           string
-	Port            string
-	APIToken        string
-	RepoAllowlist   []string
-	SkillsCacheDir  string
-	WorktreesDir    string
-	RunnerMode      string
-	CLITimeout      time.Duration
-	RunMaxUSD       float64
-	MonthMaxUSD     float64
-	Heartbeat       time.Duration
-	Workers         int
-	MaxTasksPerTick int
+	DBDSN            string
+	Port             string
+	APIToken         string
+	RepoAllowlist    []string
+	RepoPathAliases  []fsutil.PathAlias
+	HostCodeDir      string
+	ContainerCodeDir string
+	SkillsCacheDir   string
+	WorktreesDir     string
+	RunnerMode       string
+	CLITimeout       time.Duration
+	RunMaxUSD        float64
+	MonthMaxUSD      float64
+	Heartbeat        time.Duration
+	Workers          int
+	MaxTasksPerTick  int
 }
 
 func Load() Config {
+	hostCodeDir := env("MP_HOST_CODE_DIR", "")
+	containerCodeDir := env("MP_CONTAINER_CODE_DIR", "/host/code")
 	return Config{
-		DBDSN:           env("MP_DB_DSN", "postgres://mp:mp_dev_password@localhost:5432/mini_paperclip?sslmode=disable"),
-		Port:            env("MP_PORT", "8081"),
-		APIToken:        env("MP_API_TOKEN", "dev-token"),
-		RepoAllowlist:   splitPaths(env("MP_REPO_ALLOWLIST", "/host/code")),
-		SkillsCacheDir:  env("MP_SKILLS_CACHE_DIR", "/tmp/mini-paperclip/skills-cache"),
-		WorktreesDir:    env("MP_WORKTREES_DIR", "/tmp/mini-paperclip/worktrees"),
-		RunnerMode:      env("MP_RUNNER_MODE", "cli"),
-		CLITimeout:      durationEnv("MP_CLI_TIMEOUT", 600*time.Second),
-		RunMaxUSD:       floatEnv("MP_RUN_MAX_USD", 1.0),
-		MonthMaxUSD:     floatEnv("MP_MONTH_MAX_USD", 100.0),
-		Heartbeat:       durationEnv("MP_HEARTBEAT_INTERVAL", 60*time.Second),
-		Workers:         nonNegativeIntEnv("MP_WORKERS", 4),
-		MaxTasksPerTick: intEnv("MP_MAX_TASKS_PER_HEARTBEAT", 10),
+		DBDSN:            env("MP_DB_DSN", "postgres://mp:mp_dev_password@localhost:5432/mini_paperclip?sslmode=disable"),
+		Port:             env("MP_PORT", "8081"),
+		APIToken:         env("MP_API_TOKEN", "dev-token"),
+		RepoAllowlist:    splitPaths(env("MP_REPO_ALLOWLIST", "/host/code")),
+		RepoPathAliases:  repoPathAliases(hostCodeDir, containerCodeDir),
+		HostCodeDir:      hostCodeDir,
+		ContainerCodeDir: containerCodeDir,
+		SkillsCacheDir:   env("MP_SKILLS_CACHE_DIR", "/tmp/mini-paperclip/skills-cache"),
+		WorktreesDir:     env("MP_WORKTREES_DIR", "/tmp/mini-paperclip/worktrees"),
+		RunnerMode:       env("MP_RUNNER_MODE", "cli"),
+		CLITimeout:       durationEnv("MP_CLI_TIMEOUT", 600*time.Second),
+		RunMaxUSD:        floatEnv("MP_RUN_MAX_USD", 1.0),
+		MonthMaxUSD:      floatEnv("MP_MONTH_MAX_USD", 100.0),
+		Heartbeat:        durationEnv("MP_HEARTBEAT_INTERVAL", 60*time.Second),
+		Workers:          nonNegativeIntEnv("MP_WORKERS", 4),
+		MaxTasksPerTick:  intEnv("MP_MAX_TASKS_PER_HEARTBEAT", 10),
 	}
+}
+
+func repoPathAliases(hostCodeDir, containerCodeDir string) []fsutil.PathAlias {
+	hostCodeDir = strings.TrimSpace(hostCodeDir)
+	containerCodeDir = strings.TrimSpace(containerCodeDir)
+	if hostCodeDir == "" || containerCodeDir == "" || hostCodeDir == containerCodeDir {
+		return nil
+	}
+	return []fsutil.PathAlias{{From: hostCodeDir, To: containerCodeDir}}
 }
 
 func env(key, fallback string) string {

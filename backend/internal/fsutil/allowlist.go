@@ -9,7 +9,17 @@ import (
 
 var ErrOutsideAllowlist = errors.New("path is outside MP_REPO_ALLOWLIST")
 
+type PathAlias struct {
+	From string
+	To   string
+}
+
 func CleanUnderAllowlist(path string, allowlist []string) (string, error) {
+	return CleanUnderAllowlistWithAliases(path, allowlist, nil)
+}
+
+func CleanUnderAllowlistWithAliases(path string, allowlist []string, aliases []PathAlias) (string, error) {
+	path = applyPathAliases(path, aliases)
 	clean, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return "", err
@@ -26,6 +36,30 @@ func CleanUnderAllowlist(path string, allowlist []string) (string, error) {
 	return "", ErrOutsideAllowlist
 }
 
+func applyPathAliases(path string, aliases []PathAlias) string {
+	clean, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return path
+	}
+	for _, alias := range aliases {
+		from, err := filepath.Abs(filepath.Clean(alias.From))
+		if err != nil {
+			continue
+		}
+		to, err := filepath.Abs(filepath.Clean(alias.To))
+		if err != nil {
+			continue
+		}
+		if clean == from {
+			return to
+		}
+		if strings.HasPrefix(clean, from+string(os.PathSeparator)) {
+			return filepath.Join(to, strings.TrimPrefix(clean, from+string(os.PathSeparator)))
+		}
+	}
+	return path
+}
+
 type Entry struct {
 	Name  string `json:"name"`
 	Path  string `json:"path"`
@@ -33,7 +67,11 @@ type Entry struct {
 }
 
 func Browse(path string, allowlist []string) ([]Entry, error) {
-	clean, err := CleanUnderAllowlist(path, allowlist)
+	return BrowseWithAliases(path, allowlist, nil)
+}
+
+func BrowseWithAliases(path string, allowlist []string, aliases []PathAlias) ([]Entry, error) {
+	clean, err := CleanUnderAllowlistWithAliases(path, allowlist, aliases)
 	if err != nil {
 		return nil, err
 	}

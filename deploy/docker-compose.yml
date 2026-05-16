@@ -36,6 +36,8 @@ services:
       MP_RUN_MAX_USD: ${MP_RUN_MAX_USD}
       MP_MONTH_MAX_USD: ${MP_MONTH_MAX_USD}
       MP_REPO_ALLOWLIST: ${MP_REPO_ALLOWLIST}
+      MP_HOST_CODE_DIR: ${HOST_CODE_DIR}
+      MP_CONTAINER_CODE_DIR: /host/code
       MP_SKILLS_CACHE_DIR: /var/lib/mini-paperclip/skills-cache
       MP_WORKTREES_DIR: /var/lib/mini-paperclip/worktrees
       MP_RUNNER_MODE: ${MP_RUNNER_MODE}

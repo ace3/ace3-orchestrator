@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, Boxes, Check, Copy, FolderGit2, LayoutDashboard, MessageSquare, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Bot, Boxes, Check, Copy, FolderGit2, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
@@ -79,6 +79,62 @@ function pathForRoute(next: Route, id?: string) {
   }
 }
 
+type ThemeMode = "light" | "dark" | "system";
+
+function resolveTheme(mode: ThemeMode): "light" | "dark" {
+  if (mode === "system") {
+    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  return mode;
+}
+
+function useTheme(): { mode: ThemeMode; setMode: (mode: ThemeMode) => void } {
+  const [mode, setModeState] = useState<ThemeMode>(() => {
+    const stored = (typeof window !== "undefined" && window.localStorage.getItem("mp-theme")) as ThemeMode | null;
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", resolveTheme(mode));
+    try { window.localStorage.setItem("mp-theme", mode); } catch { /* ignore */ }
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const handler = () => document.documentElement.setAttribute("data-theme", resolveTheme("system"));
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [mode]);
+
+  return { mode, setMode: setModeState };
+}
+
+function ThemeSwitcher() {
+  const { mode, setMode } = useTheme();
+  const options: Array<{ id: ThemeMode; label: string; Icon: typeof Sun }> = [
+    { id: "light", label: "Light", Icon: Sun },
+    { id: "system", label: "System", Icon: Monitor },
+    { id: "dark", label: "Dark", Icon: Moon },
+  ];
+  return (
+    <div className="theme-switch" role="group" aria-label="Theme">
+      {options.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          type="button"
+          className={mode === id ? "active" : ""}
+          onClick={() => setMode(id)}
+          aria-pressed={mode === id}
+          title={label}
+        >
+          <Icon size={14} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const initialRoute = useMemo(() => routeFromPath(), []);
   const [route, setRoute] = useState<Route>(initialRoute.route);
@@ -134,7 +190,10 @@ function App() {
         <button className={route === "projects" || route === "project" || route === "board" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
         <button className={route === "agents" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
-        <label className="token">API token<input value={token} onChange={(event) => { updateToken(event.target.value); setToken(event.target.value); }} /></label>
+        <div className="sidebar-footer">
+          <ThemeSwitcher />
+          <label className="token">API token<input value={token} onChange={(event) => { updateToken(event.target.value); setToken(event.target.value); }} /></label>
+        </div>
       </aside>
       <section>
         {route === "bootstrap" && <BootstrapPage bootstrapStatus={bootstrapStatus} onStatus={setBootstrapStatus} onDone={(status) => { setBootstrapStatus(status); navigate("projects"); }} />}
@@ -257,27 +316,82 @@ function ProjectPage({ id, onOpenBoard, onDeleted }: { id: string; onOpenBoard: 
     }
   }
 
+  const repoCount = project.repos?.length || 0;
+
   return <Panel title={project.name}>
-    <div className="grid-form">
-      <input value={project.name} onChange={(e) => setProject({ ...project, name: e.target.value })} />
-      <select value={project.default_cli_kind} onChange={(e) => setProject({ ...project, default_cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
-      <button onClick={save}><Save size={16} /> Save</button>
-      <button type="button" onClick={onOpenBoard}><LayoutDashboard size={16} /> Board</button>
-    </div>
-    <form className="grid-form" onSubmit={attachRepo}>
-      <input placeholder="Allowlisted local repo path" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} />
-      <button><Plus size={16} /> Add repo</button>
-    </form>
     <Error text={error} />
-    <div className="list">{project.repos?.map((repo) => <article key={repo.id}><h3>{repo.local_path}</h3><span>{repo.default_branch} · {repo.status}</span><button onClick={async () => { await deleteRepo(repo.id); setProject(await getProject(project.id)); }}><Trash2 size={16} /> Remove</button></article>)}</div>
-    <div className="danger-zone">
-      <h2 className="section-title">Delete project</h2>
-      <p>Type <strong>{project.name}</strong> to confirm.</p>
-      <div className="confirm-form">
-        <input value={deleteConfirmName} onChange={(e) => setDeleteConfirmName(e.target.value)} placeholder={project.name} />
-        <button type="button" className="danger-button" onClick={removeProject} disabled={deleteBusy || deleteConfirmName !== project.name}><Trash2 size={16} /> Delete project</button>
+
+    <section className="detail-card">
+      <header className="detail-card-header">
+        <div>
+          <h2 className="detail-card-title">Overview</h2>
+          <p className="detail-card-sub">Project identity and default execution settings.</p>
+        </div>
+        <div className="detail-card-actions">
+          <button type="button" onClick={onOpenBoard}><LayoutDashboard size={16} /> Open board</button>
+          <button onClick={save}><Save size={16} /> Save</button>
+        </div>
+      </header>
+      <div className="detail-card-body field-grid">
+        <label className="field">
+          <span className="field-label">Project name</span>
+          <input value={project.name} onChange={(e) => setProject({ ...project, name: e.target.value })} />
+        </label>
+        <label className="field">
+          <span className="field-label">Default CLI</span>
+          <select value={project.default_cli_kind} onChange={(e) => setProject({ ...project, default_cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
+        </label>
+        <label className="field field-wide">
+          <span className="field-label">Description</span>
+          <input value={project.description || ""} placeholder="No description" onChange={(e) => setProject({ ...project, description: e.target.value })} />
+        </label>
       </div>
-    </div>
+    </section>
+
+    <section className="detail-card">
+      <header className="detail-card-header">
+        <div>
+          <h2 className="detail-card-title">Repositories <span className="count-badge">{repoCount}</span></h2>
+          <p className="detail-card-sub">Allowlisted local paths the agents may operate on.</p>
+        </div>
+      </header>
+      <div className="detail-card-body">
+        <form className="inline-form" onSubmit={attachRepo}>
+          <input placeholder="/path/to/local/repo" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} />
+          <button><Plus size={16} /> Add repo</button>
+        </form>
+        {repoCount === 0 ? (
+          <p className="empty-state">No repositories attached yet.</p>
+        ) : (
+          <ul className="repo-list">
+            {project.repos?.map((repo) => (
+              <li key={repo.id} className="repo-row">
+                <div className="repo-info">
+                  <span className="repo-path">{repo.local_path}</span>
+                  <span className="repo-meta">{repo.default_branch || "main"} · {repo.status}</span>
+                </div>
+                <button type="button" className="ghost-danger" onClick={async () => { await deleteRepo(repo.id); setProject(await getProject(project.id)); }}><Trash2 size={14} /> Remove</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+
+    <section className="detail-card danger-card">
+      <header className="detail-card-header">
+        <div>
+          <h2 className="detail-card-title">Delete project</h2>
+          <p className="detail-card-sub">This action is permanent. Type <strong>{project.name}</strong> to confirm.</p>
+        </div>
+      </header>
+      <div className="detail-card-body">
+        <div className="confirm-form">
+          <input value={deleteConfirmName} onChange={(e) => setDeleteConfirmName(e.target.value)} placeholder={project.name} />
+          <button type="button" className="danger-button" onClick={removeProject} disabled={deleteBusy || deleteConfirmName !== project.name}><Trash2 size={16} /> Delete project</button>
+        </div>
+      </div>
+    </section>
   </Panel>;
 }
 
@@ -330,18 +444,91 @@ function BoardPage({ id }: { id: string }) {
   </Panel>;
 }
 
+const STATUS_LABELS: Record<Task["status"], string> = {
+  todo: "Todo",
+  in_progress: "In Progress",
+  in_review: "In Review",
+  blocked: "Blocked",
+  done: "Done",
+  cancelled: "Cancelled",
+};
+
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function priorityClass(priority: number): string {
+  if (priority >= 8) return "high";
+  if (priority >= 4) return "med";
+  return "";
+}
+
+function shortId(id: string): string {
+  return id.slice(0, 6).toUpperCase();
+}
+
 function Kanban({ tasks, agents, onOpen, onMove }: { tasks: Task[]; agents: Agent[]; onOpen: (task: Task) => void; onMove: (task: Task, status: Task["status"]) => void }) {
   const statuses: Task["status"][] = ["todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
   const agentName = (id: string | null) => agents.find((agent) => agent.id === id)?.name || id || "Unassigned";
-  return <div className="kanban">{statuses.map((status) => <section className="column" key={status}>
-    <h2>{status.replace("_", " ")}</h2>
-    {tasks.filter((task) => task.status === status).map((task) => <article className="task-card" key={task.id} onClick={() => onOpen(task)}>
-      <h3>{task.title}</h3>
-      <p>{task.description || "No description"}</p>
-      <span>{agentName(task.assignee_agent_id)} · priority {task.priority}</span>
-      <select value={task.status} onClick={(e) => e.stopPropagation()} onChange={(e) => onMove(task, e.target.value as Task["status"])}>{statuses.map((item) => <option key={item}>{item}</option>)}</select>
-    </article>)}
-  </section>)}</div>;
+  return (
+    <div className="kanban">
+      {statuses.map((status) => {
+        const items = tasks.filter((task) => task.status === status);
+        return (
+          <section className="column" key={status}>
+            <header className="column-header">
+              <span className={`col-icon status-${status}`} />
+              <span className="col-name">{STATUS_LABELS[status]}</span>
+              <span className="col-count">{items.length}</span>
+              <span className="spacer" />
+              <button type="button" className="col-action" aria-label="Column actions">
+                <MoreHorizontal size={14} />
+              </button>
+              <button type="button" className="col-action" aria-label="Add task to column">
+                <Plus size={14} />
+              </button>
+            </header>
+            <div className="column-body">
+              {items.length === 0 ? (
+                <div className="column-empty">No tasks</div>
+              ) : (
+                items.map((task) => {
+                  const aName = agentName(task.assignee_agent_id);
+                  return (
+                    <article className="task-card" key={task.id} onClick={() => onOpen(task)}>
+                      <div className="task-card-top">
+                        <span className="task-id">TASK-{shortId(task.id)}</span>
+                        <span className={`task-priority ${priorityClass(task.priority)}`}>P{task.priority}</span>
+                      </div>
+                      <h3 className="task-title">{task.title}</h3>
+                      {task.description && <p className="task-desc">{task.description}</p>}
+                      <div className="task-footer">
+                        <span className="task-chip agent" title={aName}>
+                          <span className="task-avatar" aria-hidden="true">{initialsOf(aName)}</span>
+                          {aName}
+                        </span>
+                        <select
+                          value={task.status}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => onMove(task, e.target.value as Task["status"])}
+                          aria-label="Move task"
+                        >
+                          {statuses.map((item) => <option key={item} value={item}>{STATUS_LABELS[item]}</option>)}
+                        </select>
+                      </div>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
 function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: Agent[]; onClose: () => void; onRefresh: () => Promise<void> }) {

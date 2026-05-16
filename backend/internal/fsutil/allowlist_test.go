@@ -24,3 +24,18 @@ func TestCleanUnderAllowlist(t *testing.T) {
 		t.Fatalf("got %v want ErrOutsideAllowlist", err)
 	}
 }
+
+func TestCleanUnderAllowlistWithAliases(t *testing.T) {
+	got, err := CleanUnderAllowlistWithAliases(
+		"/Users/ignasius/_PROJECT/_NOBI/repo",
+		[]string{"/host/code"},
+		[]PathAlias{{From: "/Users/ignasius/_PROJECT", To: "/host/code"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/host/code/_NOBI/repo"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}

@@ -19,12 +19,13 @@ var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("conflict")
 
 type Store struct {
-	db        *sqlx.DB
-	allowlist []string
+	db          *sqlx.DB
+	allowlist   []string
+	pathAliases []fsutil.PathAlias
 }
 
-func New(db *sqlx.DB, allowlist []string) *Store {
-	return &Store{db: db, allowlist: allowlist}
+func New(db *sqlx.DB, allowlist []string, pathAliases ...fsutil.PathAlias) *Store {
+	return &Store{db: db, allowlist: allowlist, pathAliases: pathAliases}
 }
 
 func (s *Store) DB() *sqlx.DB {
@@ -416,7 +417,7 @@ func (s *Store) ListRepos(ctx context.Context, projectID string) ([]models.Repo,
 }
 
 func (s *Store) CreateRepo(ctx context.Context, projectID string, in RepoInput) (models.Repo, error) {
-	clean, err := fsutil.CleanUnderAllowlist(in.LocalPath, s.allowlist)
+	clean, err := fsutil.CleanUnderAllowlistWithAliases(in.LocalPath, s.allowlist, s.pathAliases)
 	if err != nil {
 		return models.Repo{}, err
 	}
