@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, Boxes, Check, Copy, FolderGit2, MessageSquare, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Bot, Boxes, Check, Copy, FolderGit2, LayoutDashboard, MessageSquare, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
+  BootstrapStatus,
   Comment,
   Project,
   Run,
@@ -17,13 +18,16 @@ import {
   createProject,
   createTask,
   deleteAgent,
+  deleteProject,
   deleteRepo,
   duplicateAgent,
   eventsURL,
+  getAgent,
   getBootstrapStatus,
   getProject,
   getToken,
   heartbeat,
+  improveAgentPrompt,
   listAgents,
   listComments,
   listInstalledSkills,
@@ -43,59 +47,132 @@ import {
   updateProject
 } from "./lib/api";
 
-type Route = "bootstrap" | "projects" | "project" | "agents" | "skills";
+type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent" | "skills";
+
+type RouteState = {
+  route: Route;
+  projectId: string | null;
+  agentId: string | null;
+};
+
+function routeFromPath(pathname = window.location.pathname): RouteState {
+  const parts = pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
+  if (parts[0] === "bootstrap") return { route: "bootstrap", projectId: null, agentId: null };
+  if (parts[0] === "projects" && parts[1] && parts[2] === "board") return { route: "board", projectId: parts[1], agentId: null };
+  if (parts[0] === "projects" && parts[1]) return { route: "project", projectId: parts[1], agentId: null };
+  if (parts[0] === "agents" && parts[1]) return { route: "agent", projectId: null, agentId: parts[1] };
+  if (parts[0] === "agents") return { route: "agents", projectId: null, agentId: null };
+  if (parts[0] === "skills") return { route: "skills", projectId: null, agentId: null };
+  return { route: "projects", projectId: null, agentId: null };
+}
+
+function pathForRoute(next: Route, id?: string) {
+  switch (next) {
+    case "bootstrap": return "/bootstrap";
+    case "project": return id ? `/projects/${encodeURIComponent(id)}` : "/projects";
+    case "board": return id ? `/projects/${encodeURIComponent(id)}/board` : "/projects";
+    case "agents": return "/agents";
+    case "agent": return id ? `/agents/${encodeURIComponent(id)}` : "/agents";
+    case "skills": return "/skills";
+    case "projects":
+    default: return "/projects";
+  }
+}
 
 function App() {
-  const [route, setRoute] = useState<Route>("projects");
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const initialRoute = useMemo(() => routeFromPath(), []);
+  const [route, setRoute] = useState<Route>(initialRoute.route);
+  const [projectId, setProjectId] = useState<string | null>(initialRoute.projectId);
+  const [agentId, setAgentId] = useState<string | null>(initialRoute.agentId);
   const [token, updateToken] = useState(getToken());
+  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
+
+  function applyRoute(next: RouteState) {
+    setProjectId(next.projectId);
+    setAgentId(next.agentId);
+    setRoute(next.route);
+  }
+
+  useEffect(() => {
+    function syncFromHistory() {
+      applyRoute(routeFromPath());
+    }
+    window.addEventListener("popstate", syncFromHistory);
+    return () => window.removeEventListener("popstate", syncFromHistory);
+  }, []);
 
   useEffect(() => {
     getBootstrapStatus()
-      .then((status) => setRoute(status.bootstrapped ? "projects" : "bootstrap"))
-      .catch(() => setRoute("bootstrap"));
+      .then((status) => {
+        setBootstrapStatus(status);
+        if (!status.bootstrapped) {
+          navigate("bootstrap", undefined, true);
+        } else if (routeFromPath().route === "bootstrap") {
+          navigate("projects", undefined, true);
+        }
+      })
+      .catch(() => navigate("bootstrap", undefined, true));
   }, []);
 
-  function navigate(next: Route, id?: string) {
-    setProjectId(id || null);
-    setRoute(next);
+  function navigate(next: Route, id?: string, replace = false) {
+    const path = pathForRoute(next, id);
+    if (window.location.pathname !== path) {
+      if (replace) {
+        window.history.replaceState(null, "", path);
+      } else {
+        window.history.pushState(null, "", path);
+      }
+    }
+    applyRoute(routeFromPath(path));
   }
 
   return (
     <main>
       <aside>
         <div className="brand"><Boxes size={22} /> mini-Paperclip</div>
-        <button className={route === "bootstrap" ? "active" : ""} onClick={() => navigate("bootstrap")}>Bootstrap</button>
-        <button className={route === "projects" || route === "project" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
-        <button className={route === "agents" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
+        {!bootstrapStatus?.bootstrapped && <button className={route === "bootstrap" ? "active" : ""} onClick={() => navigate("bootstrap")}>Bootstrap</button>}
+        <button className={route === "projects" || route === "project" || route === "board" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
+        <button className={route === "agents" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
         <label className="token">API token<input value={token} onChange={(event) => { updateToken(event.target.value); setToken(event.target.value); }} /></label>
       </aside>
       <section>
-        {route === "bootstrap" && <BootstrapPage onDone={() => navigate("projects")} />}
-        {route === "projects" && <ProjectsPage openProject={(id) => navigate("project", id)} />}
-        {route === "project" && projectId && <ProjectPage id={projectId} />}
-        {route === "agents" && <AgentsPage />}
+        {route === "bootstrap" && <BootstrapPage bootstrapStatus={bootstrapStatus} onStatus={setBootstrapStatus} onDone={(status) => { setBootstrapStatus(status); navigate("projects"); }} />}
+        {route === "projects" && <ProjectsPage openProject={(id) => navigate("project", id)} openBoard={(id) => navigate("board", id)} />}
+        {route === "project" && projectId && <ProjectPage id={projectId} onOpenBoard={() => navigate("board", projectId)} onDeleted={() => navigate("projects")} />}
+        {route === "board" && projectId && <BoardPage id={projectId} />}
+        {route === "agents" && <AgentsPage openAgent={(id) => navigate("agent", id)} />}
+        {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} onDeleted={() => navigate("agents")} />}
         {route === "skills" && <SkillSourcesPage />}
       </section>
     </main>
   );
 }
 
-function BootstrapPage({ onDone }: { onDone: () => void }) {
+function BootstrapPage({ bootstrapStatus, onStatus, onDone }: { bootstrapStatus: BootstrapStatus | null; onStatus: (status: BootstrapStatus) => void; onDone: (status: BootstrapStatus) => void }) {
   const [message, setMessage] = useState("Checking bootstrap status...");
   const [busy, setBusy] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState<BootstrapStatus | null>(bootstrapStatus);
 
   useEffect(() => {
-    getBootstrapStatus().then((status) => setMessage(status.bootstrapped ? `${status.agents_count} agents seeded.` : "Bootstrap is required."));
-  }, []);
+    setCurrentStatus(bootstrapStatus);
+  }, [bootstrapStatus]);
+
+  useEffect(() => {
+    getBootstrapStatus().then((status) => {
+      setCurrentStatus(status);
+      onStatus(status);
+      setMessage(status.bootstrapped ? `${status.agents_count} agents seeded.` : "Bootstrap is required.");
+    });
+  }, [onStatus]);
 
   async function run() {
     setBusy(true);
     try {
       const status = await runBootstrap();
+      setCurrentStatus(status);
       setMessage(`${status.agents_count} agents ready.`);
-      onDone();
+      onDone(status);
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -103,12 +180,12 @@ function BootstrapPage({ onDone }: { onDone: () => void }) {
     }
   }
 
-  return <Panel title="Bootstrap"><p>{message}</p><button onClick={run} disabled={busy}><Check size={16} /> Run bootstrap</button></Panel>;
+  return <Panel title="Bootstrap"><p>{message}</p>{!currentStatus?.bootstrapped && <button onClick={run} disabled={busy}><Check size={16} /> Run bootstrap</button>}</Panel>;
 }
 
-function ProjectsPage({ openProject }: { openProject: (id: string) => void }) {
+function ProjectsPage({ openProject, openBoard }: { openProject: (id: string) => void; openBoard: (id: string) => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [form, setForm] = useState<Pick<Project, "name" | "description" | "default_cli_kind" | "default_branch_strategy">>({ name: "", description: "", default_cli_kind: "claude", default_branch_strategy: "worktree-per-run" });
+  const [form, setForm] = useState<Pick<Project, "name" | "description" | "default_cli_kind" | "default_branch_strategy">>({ name: "", description: "", default_cli_kind: "codex", default_branch_strategy: "worktree-per-run" });
   const [error, setError] = useState("");
   useEffect(() => { listProjects().then(setProjects).catch((e) => setError(e.message)); }, []);
 
@@ -129,25 +206,26 @@ function ProjectsPage({ openProject }: { openProject: (id: string) => void }) {
       <button><Plus size={16} /> Create</button>
     </form>
     <Error text={error} />
-    <div className="list">{projects.map((project) => <article key={project.id} onClick={() => openProject(project.id)}><h3>{project.name}</h3><p>{project.description || "No description"}</p><span>{project.default_cli_kind} · {project.repos?.length || 0} repos</span></article>)}</div>
+    <div className="list">{projects.map((project) => <article key={project.id}>
+      <h3>{project.name}</h3>
+      <p>{project.description || "No description"}</p>
+      <span>{project.default_cli_kind} · {project.repos?.length || 0} repos</span>
+      <div className="toolbar">
+        <button type="button" onClick={() => openProject(project.id)}><FolderGit2 size={16} /> Details</button>
+        <button type="button" onClick={() => openBoard(project.id)}><LayoutDashboard size={16} /> Board</button>
+      </div>
+    </article>)}</div>
   </Panel>;
 }
 
-function ProjectPage({ id }: { id: string }) {
+function ProjectPage({ id, onOpenBoard, onDeleted }: { id: string; onOpenBoard: () => void; onDeleted: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [repoPath, setRepoPath] = useState("");
-  const [taskForm, setTaskForm] = useState({ title: "", description: "", assignee_agent_id: "pm", priority: 0 });
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     getProject(id).then(setProject).catch((e) => setError(e.message));
-    listAgents().then(setAgents).catch((e) => setError(e.message));
-    listTasks(id).then(setTasks).catch((e) => setError(e.message));
-    const events = new EventSource(eventsURL());
-    events.addEventListener("mp_events", () => listTasks(id).then(setTasks).catch(() => undefined));
-    return () => events.close();
   }, [id]);
   if (!project) return <Panel title="Project"><Error text={error || "Loading..."} /></Panel>;
 
@@ -166,6 +244,62 @@ function ProjectPage({ id }: { id: string }) {
       setRepoPath("");
     } catch (e) { setError((e as Error).message); }
   }
+  async function removeProject() {
+    const current = project;
+    if (!current || deleteConfirmName !== current.name) return;
+    setDeleteBusy(true);
+    try {
+      await deleteProject(current.id);
+      onDeleted();
+    } catch (e) {
+      setError((e as Error).message);
+      setDeleteBusy(false);
+    }
+  }
+
+  return <Panel title={project.name}>
+    <div className="grid-form">
+      <input value={project.name} onChange={(e) => setProject({ ...project, name: e.target.value })} />
+      <select value={project.default_cli_kind} onChange={(e) => setProject({ ...project, default_cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
+      <button onClick={save}><Save size={16} /> Save</button>
+      <button type="button" onClick={onOpenBoard}><LayoutDashboard size={16} /> Board</button>
+    </div>
+    <form className="grid-form" onSubmit={attachRepo}>
+      <input placeholder="Allowlisted local repo path" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} />
+      <button><Plus size={16} /> Add repo</button>
+    </form>
+    <Error text={error} />
+    <div className="list">{project.repos?.map((repo) => <article key={repo.id}><h3>{repo.local_path}</h3><span>{repo.default_branch} · {repo.status}</span><button onClick={async () => { await deleteRepo(repo.id); setProject(await getProject(project.id)); }}><Trash2 size={16} /> Remove</button></article>)}</div>
+    <div className="danger-zone">
+      <h2 className="section-title">Delete project</h2>
+      <p>Type <strong>{project.name}</strong> to confirm.</p>
+      <div className="confirm-form">
+        <input value={deleteConfirmName} onChange={(e) => setDeleteConfirmName(e.target.value)} placeholder={project.name} />
+        <button type="button" className="danger-button" onClick={removeProject} disabled={deleteBusy || deleteConfirmName !== project.name}><Trash2 size={16} /> Delete project</button>
+      </div>
+    </div>
+  </Panel>;
+}
+
+function BoardPage({ id }: { id: string }) {
+  const [project, setProject] = useState<Project | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [taskForm, setTaskForm] = useState({ title: "", description: "", assignee_agent_id: "pm", priority: 0 });
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getProject(id).then(setProject).catch((e) => setError(e.message));
+    listAgents().then(setAgents).catch((e) => setError(e.message));
+    listTasks(id).then(setTasks).catch((e) => setError(e.message));
+    const events = new EventSource(eventsURL());
+    events.addEventListener("mp_events", () => listTasks(id).then(setTasks).catch(() => undefined));
+    return () => events.close();
+  }, [id]);
+
+  if (!project) return <Panel title="Board"><Error text={error || "Loading..."} /></Panel>;
+
   async function submitTask(event: React.FormEvent) {
     event.preventDefault();
     const current = project;
@@ -182,18 +316,8 @@ function ProjectPage({ id }: { id: string }) {
     if (selectedTask?.id === updated.id) setSelectedTask(updated);
   }
 
-  return <Panel title={project.name}>
-    <div className="grid-form">
-      <input value={project.name} onChange={(e) => setProject({ ...project, name: e.target.value })} />
-      <select value={project.default_cli_kind} onChange={(e) => setProject({ ...project, default_cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
-      <button onClick={save}><Save size={16} /> Save</button>
-    </div>
-    <form className="grid-form" onSubmit={attachRepo}>
-      <input placeholder="Allowlisted local repo path" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} />
-      <button><Plus size={16} /> Add repo</button>
-    </form>
+  return <Panel title={`${project.name} Board`}>
     <Error text={error} />
-    <div className="list">{project.repos?.map((repo) => <article key={repo.id}><h3>{repo.local_path}</h3><span>{repo.default_branch} · {repo.status}</span><button onClick={async () => { await deleteRepo(repo.id); setProject(await getProject(project.id)); }}><Trash2 size={16} /> Remove</button></article>)}</div>
     <form className="task-form" onSubmit={submitTask}>
       <input placeholder="New task title" value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} required />
       <input placeholder="Description" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} />
@@ -253,40 +377,90 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   </div>;
 }
 
-function AgentsPage() {
+function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [selected, setSelected] = useState<Agent | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => { listAgents().then((items) => { setAgents(items); setSelected(items[0] || null); }).catch((e) => setError(e.message)); }, []);
-  const blank = useMemo<Agent>(() => ({ id: "", name: "", role: "custom", role_prompt: "", cli_kind: "claude", cli_profile: null, enabled: true }), []);
-
-  async function save() {
-    if (!selected) return;
-    try {
-      const saved = selected.id ? await updateAgent(selected.id, selected) : await createAgent(selected);
-      const fresh = await listAgents();
-      setAgents(fresh);
-      setSelected(saved);
-    } catch (e) { setError((e as Error).message); }
-  }
+  useEffect(() => { listAgents().then(setAgents).catch((e) => setError(e.message)); }, []);
 
   return <Panel title="Agents">
-    <div className="split">
-      <div className="list">{agents.map((agent) => <article key={agent.id} onClick={() => setSelected(agent)}><h3>{agent.name}</h3><span>{agent.role} · {agent.cli_kind} · {agent.enabled ? "enabled" : "disabled"}</span></article>)}
-      <button onClick={() => setSelected(blank)}><Plus size={16} /> New agent</button></div>
-      {selected && <div className="editor">
-        <input value={selected.name} onChange={(e) => setSelected({ ...selected, name: e.target.value })} placeholder="Name" />
-        <input value={selected.role} onChange={(e) => setSelected({ ...selected, role: e.target.value })} placeholder="Role" />
-        <select value={selected.cli_kind} onChange={(e) => setSelected({ ...selected, cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
-        <textarea value={selected.role_prompt} onChange={(e) => setSelected({ ...selected, role_prompt: e.target.value })} placeholder="Role prompt" />
-        <label><input type="checkbox" checked={selected.enabled} onChange={(e) => setSelected({ ...selected, enabled: e.target.checked })} /> Enabled</label>
-        <div className="toolbar">
-          <button onClick={save}><Save size={16} /> Save</button>
-          {selected.id && <button onClick={async () => setAgents([await duplicateAgent(selected.id), ...agents])}><Copy size={16} /> Duplicate</button>}
-          {selected.id && <button onClick={async () => setSelected(await setAgentEnabled(selected.id, !selected.enabled))}>{selected.enabled ? "Disable" : "Enable"}</button>}
-          {selected.id && <button onClick={async () => { await deleteAgent(selected.id); setAgents(await listAgents()); setSelected(null); }}><Trash2 size={16} /> Delete</button>}
-        </div>
-      </div>}
+    <div className="toolbar"><button onClick={() => openAgent("new")}><Plus size={16} /> New agent</button></div>
+    <div className="list">
+      {agents.map((agent) => <article className="clickable" key={agent.id} onClick={() => openAgent(agent.id)}>
+        <h3>{agent.name}</h3>
+        <span>{agent.role} · {agent.cli_kind} · {agent.enabled ? "enabled" : "disabled"} · {agent.skills?.length || 0} skills</span>
+      </article>)}
+    </div>
+    <Error text={error} />
+  </Panel>;
+}
+
+function AgentDetailPage({ id, onSaved, onDeleted }: { id: string; onSaved: (id: string) => void; onDeleted: () => void }) {
+  const blank = useMemo<Agent>(() => ({ id: "", name: "", role: "custom", role_prompt: "", cli_kind: "codex", cli_profile: null, enabled: true, skills: [] }), []);
+  const [agent, setAgent] = useState<Agent | null>(id === "new" ? blank : null);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [improving, setImproving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    listInstalledSkills().then(setSkills).catch((e) => setError(e.message));
+    if (id === "new") {
+      setAgent(blank);
+      setSelectedSkillIds([]);
+      return;
+    }
+    getAgent(id).then((item) => {
+      setAgent(item);
+      setSelectedSkillIds((item.skills || []).map((skill) => skill.id));
+    }).catch((e) => setError(e.message));
+  }, [blank, id]);
+
+  if (!agent) return <Panel title="Agent"><Error text={error || "Loading..."} /></Panel>;
+
+  function toggleSkill(skillID: string, checked: boolean) {
+    setSelectedSkillIds(checked ? [...selectedSkillIds, skillID] : selectedSkillIds.filter((item) => item !== skillID));
+  }
+  async function save() {
+    const current = agent;
+    if (!current) return;
+    setBusy(true);
+    try {
+      const saved = current.id ? await updateAgent(current.id, { ...current, skill_ids: selectedSkillIds }) : await createAgent({ ...current, skill_ids: selectedSkillIds });
+      setAgent(saved);
+      setSelectedSkillIds((saved.skills || []).map((skill) => skill.id));
+      onSaved(saved.id);
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
+  async function improvePrompt() {
+    const current = agent;
+    if (!current?.id) {
+      setError("Save the agent before improving its base prompt.");
+      return;
+    }
+    setImproving(true);
+    try {
+      const improved = await improveAgentPrompt(current.id, { ...current, skill_ids: selectedSkillIds });
+      setAgent({ ...current, role_prompt: improved.role_prompt });
+    } catch (e) { setError((e as Error).message); } finally { setImproving(false); }
+  }
+
+  return <Panel title={agent.id ? agent.name : "New agent"}>
+    <div className="editor">
+      <input value={agent.name} onChange={(e) => setAgent({ ...agent, name: e.target.value })} placeholder="Name" />
+      <input value={agent.role} onChange={(e) => setAgent({ ...agent, role: e.target.value })} placeholder="Role" />
+      <select value={agent.cli_kind} onChange={(e) => setAgent({ ...agent, cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
+      <textarea value={agent.role_prompt} onChange={(e) => setAgent({ ...agent, role_prompt: e.target.value })} placeholder="Role prompt" />
+      <label><input type="checkbox" checked={agent.enabled} onChange={(e) => setAgent({ ...agent, enabled: e.target.checked })} /> Enabled</label>
+      <h2 className="section-title">Skills</h2>
+      <div className="skill-picker">{skills.map((skill) => <label key={skill.id}><input type="checkbox" checked={selectedSkillIds.includes(skill.id)} onChange={(e) => toggleSkill(skill.id, e.target.checked)} /> <span>{skill.name}</span></label>)}</div>
+      <div className="toolbar">
+        <button onClick={save} disabled={busy}><Save size={16} /> Save</button>
+        {agent.id && <button onClick={improvePrompt} disabled={improving}><RefreshCw size={16} /> Improve prompt</button>}
+        {agent.id && <button onClick={async () => setAgent(await setAgentEnabled(agent.id, !agent.enabled))}>{agent.enabled ? "Disable" : "Enable"}</button>}
+        {agent.id && <button onClick={async () => { const copy = await duplicateAgent(agent.id); onSaved(copy.id); }}><Copy size={16} /> Duplicate</button>}
+        {agent.id && <button onClick={async () => { await deleteAgent(agent.id); onDeleted(); }}><Trash2 size={16} /> Delete</button>}
+      </div>
     </div>
     <Error text={error} />
   </Panel>;

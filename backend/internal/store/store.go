@@ -212,6 +212,25 @@ func (s *Store) AgentSkills(ctx context.Context, agentID string) ([]models.Skill
 	return skills, s.db.SelectContext(ctx, &skills, `SELECT s.* FROM skills s JOIN agent_skills a ON a.skill_id=s.id WHERE a.agent_id=$1 ORDER BY s.name`, agentID)
 }
 
+func (s *Store) SkillsByID(ctx context.Context, ids []string) ([]models.Skill, error) {
+	skills := make([]models.Skill, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		var skill models.Skill
+		if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE id=$1 AND archived=false", id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, ErrNotFound
+			}
+			return nil, err
+		}
+		skills = append(skills, skill)
+	}
+	return skills, nil
+}
+
 func replaceAgentSkills(ctx context.Context, tx *sqlx.Tx, agentID string, skillIDs []string) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM agent_skills WHERE agent_id=$1", agentID); err != nil {
 		return err

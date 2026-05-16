@@ -39,6 +39,7 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Delete("/agents/{id}", api.deleteAgent)
 		r.Post("/agents/{id}/duplicate", api.duplicateAgent)
 		r.Post("/agents/{id}/enabled", api.setAgentEnabled)
+		r.Post("/agents/{id}/improve-prompt", api.improveAgentPrompt)
 		r.Get("/projects", api.listProjects)
 		r.Post("/projects", api.createProject)
 		r.Get("/projects/{id}", api.getProject)

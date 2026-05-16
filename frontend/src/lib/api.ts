@@ -124,8 +124,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const getBootstrapStatus = () => api<BootstrapStatus>("/bootstrap-status");
 export const runBootstrap = () => api<BootstrapStatus>("/bootstrap/run", { method: "POST" });
 export const listAgents = () => api<Agent[]>("/agents");
+export const getAgent = (id: string) => api<Agent>(`/agents/${id}`);
 export const createAgent = (body: Partial<Agent> & { skill_ids?: string[] }) => api<Agent>("/agents", { method: "POST", body: JSON.stringify(body) });
 export const updateAgent = (id: string, body: Partial<Agent> & { skill_ids?: string[] }) => api<Agent>(`/agents/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+export const improveAgentPrompt = (id: string, body: Partial<Agent> & { skill_ids?: string[] }) => api<{ role_prompt: string }>(`/agents/${id}/improve-prompt`, { method: "POST", body: JSON.stringify(body) });
 export const duplicateAgent = (id: string) => api<Agent>(`/agents/${id}/duplicate`, { method: "POST" });
 export const setAgentEnabled = (id: string, enabled: boolean) => api<Agent>(`/agents/${id}/enabled`, { method: "POST", body: JSON.stringify({ enabled }) });
 export const deleteAgent = (id: string) => api<{ deleted: boolean }>(`/agents/${id}`, { method: "DELETE" });
@@ -133,6 +135,7 @@ export const listProjects = () => api<Project[]>("/projects");
 export const createProject = (body: Partial<Project>) => api<Project>("/projects", { method: "POST", body: JSON.stringify(body) });
 export const getProject = (id: string) => api<Project>(`/projects/${id}`);
 export const updateProject = (id: string, body: Partial<Project>) => api<Project>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+export const deleteProject = (id: string) => api<{ deleted: boolean }>(`/projects/${id}`, { method: "DELETE" });
 export const addRepo = (projectId: string, body: { local_path: string; default_branch?: string }) => api<Repo>(`/projects/${projectId}/repos`, { method: "POST", body: JSON.stringify(body) });
 export const deleteRepo = (id: string) => api<{ deleted: boolean }>(`/repos/${id}`, { method: "DELETE" });
 export const listTasks = (projectId: string) => api<Task[]>(`/projects/${projectId}/tasks`);
