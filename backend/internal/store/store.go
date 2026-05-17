@@ -155,6 +155,62 @@ func (s *Store) UpdateAgent(ctx context.Context, id string, in AgentInput) (mode
 	return s.GetAgent(ctx, id)
 }
 
+func (s *Store) UpdateAgentRuntime(ctx context.Context, id string, in AgentInput) (models.Agent, error) {
+	agent, err := s.GetAgent(ctx, id)
+	if err != nil {
+		return agent, err
+	}
+	if in.Enabled != nil {
+		agent.Enabled = *in.Enabled
+	}
+	agent.CLIProfile = in.CLIProfile
+	if _, err := s.db.ExecContext(ctx, `UPDATE agents SET cli_profile=$2, enabled=$3, updated_at=now() WHERE id=$1`,
+		id, agent.CLIProfile, agent.Enabled); err != nil {
+		return agent, err
+	}
+	return s.GetAgent(ctx, id)
+}
+
+func (s *Store) SyncRepoAgent(ctx context.Context, in AgentInput) (models.Agent, error) {
+	enabled := true
+	if in.Enabled != nil {
+		enabled = *in.Enabled
+	}
+	if err := validateCLIKind(in.CLIKind); err != nil {
+		return models.Agent{}, err
+	}
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return models.Agent{}, err
+	}
+	var exists bool
+	if err := tx.GetContext(ctx, &exists, "SELECT EXISTS (SELECT 1 FROM agents WHERE id=$1)", in.ID); err != nil {
+		_ = tx.Rollback()
+		return models.Agent{}, err
+	}
+	if exists {
+		if _, err := tx.ExecContext(ctx, `UPDATE agents SET name=$2, role=$3, role_prompt=$4, cli_kind=$5, updated_at=now() WHERE id=$1`,
+			in.ID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Role), in.RolePrompt, in.CLIKind); err != nil {
+			_ = tx.Rollback()
+			return models.Agent{}, err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agents (id, name, role, role_prompt, cli_kind, cli_profile, enabled)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)`, in.ID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Role), in.RolePrompt, in.CLIKind, in.CLIProfile, enabled); err != nil {
+			_ = tx.Rollback()
+			return models.Agent{}, err
+		}
+	}
+	if err := replaceAgentSkills(ctx, tx, in.ID, in.SkillIDs); err != nil {
+		_ = tx.Rollback()
+		return models.Agent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return models.Agent{}, err
+	}
+	return s.GetAgent(ctx, in.ID)
+}
+
 func (s *Store) DeleteAgent(ctx context.Context, id string) error {
 	var exists bool
 	if err := s.db.GetContext(ctx, &exists, "SELECT EXISTS (SELECT 1 FROM agents WHERE id=$1)", id); err != nil {
@@ -224,6 +280,25 @@ func (s *Store) SkillsByID(ctx context.Context, ids []string) ([]models.Skill, e
 		if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE id=$1 AND archived=false", id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, ErrNotFound
+			}
+			return nil, err
+		}
+		skills = append(skills, skill)
+	}
+	return skills, nil
+}
+
+func (s *Store) SkillsByName(ctx context.Context, names []string) ([]models.Skill, error) {
+	skills := make([]models.Skill, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		var skill models.Skill
+		if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE name=$1 AND archived=false ORDER BY source_id, path_in_source LIMIT 1", name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("repo-defined skill %q is not installed", name)
 			}
 			return nil, err
 		}

@@ -72,3 +72,10 @@ func TestMockRunnerInvalidJSONSmoke(t *testing.T) {
 		t.Fatal("expected invalid stdout")
 	}
 }
+
+func TestHashablePromptIncludesSystemPrompt(t *testing.T) {
+	taskPrompt := "task"
+	if hashablePrompt("system-a", taskPrompt) == hashablePrompt("system-b", taskPrompt) {
+		t.Fatal("definition prompt changes must affect run prompt hash input")
+	}
+}

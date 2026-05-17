@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, Boxes, Check, Copy, FolderGit2, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
+import { Bot, Boxes, Check, FolderGit2, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
@@ -14,20 +14,16 @@ import {
   Task,
   addComment,
   addRepo,
-  createAgent,
   createProject,
   createTask,
-  deleteAgent,
   deleteProject,
   deleteRepo,
-  duplicateAgent,
   eventsURL,
   getAgent,
   getBootstrapStatus,
   getProject,
   getToken,
   heartbeat,
-  improveAgentPrompt,
   listAgents,
   listComments,
   listInstalledSkills,
@@ -201,7 +197,7 @@ function App() {
         {route === "project" && projectId && <ProjectPage id={projectId} onOpenBoard={() => navigate("board", projectId)} onDeleted={() => navigate("projects")} />}
         {route === "board" && projectId && <BoardPage id={projectId} />}
         {route === "agents" && <AgentsPage openAgent={(id) => navigate("agent", id)} />}
-        {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} onDeleted={() => navigate("agents")} />}
+        {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} />}
         {route === "skills" && <SkillSourcesPage />}
       </section>
     </main>
@@ -645,7 +641,6 @@ function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
   useEffect(() => { listAgents().then(setAgents).catch((e) => setError(e.message)); }, []);
 
   return <Panel title="Agents">
-    <div className="toolbar"><button onClick={() => openAgent("new")}><Plus size={16} /> New agent</button></div>
     <div className="list">
       {agents.map((agent) => <article className="clickable" key={agent.id} onClick={() => openAgent(agent.id)}>
         <h3>{agent.name}</h3>
@@ -656,72 +651,42 @@ function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
   </Panel>;
 }
 
-function AgentDetailPage({ id, onSaved, onDeleted }: { id: string; onSaved: (id: string) => void; onDeleted: () => void }) {
-  const blank = useMemo<Agent>(() => ({ id: "", name: "", role: "custom", role_prompt: "", cli_kind: "codex", cli_profile: null, enabled: true, skills: [] }), []);
-  const [agent, setAgent] = useState<Agent | null>(id === "new" ? blank : null);
-  const [skills, setSkills] = useState<Skill[]>([]);
-  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) => void }) {
+  const [agent, setAgent] = useState<Agent | null>(null);
   const [busy, setBusy] = useState(false);
-  const [improving, setImproving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    listInstalledSkills().then(setSkills).catch((e) => setError(e.message));
-    if (id === "new") {
-      setAgent(blank);
-      setSelectedSkillIds([]);
-      return;
-    }
-    getAgent(id).then((item) => {
-      setAgent(item);
-      setSelectedSkillIds((item.skills || []).map((skill) => skill.id));
-    }).catch((e) => setError(e.message));
-  }, [blank, id]);
+    getAgent(id).then(setAgent).catch((e) => setError(e.message));
+  }, [id]);
 
   if (!agent) return <Panel title="Agent"><Error text={error || "Loading..."} /></Panel>;
 
-  function toggleSkill(skillID: string, checked: boolean) {
-    setSelectedSkillIds(checked ? [...selectedSkillIds, skillID] : selectedSkillIds.filter((item) => item !== skillID));
-  }
   async function save() {
     const current = agent;
     if (!current) return;
     setBusy(true);
     try {
-      const saved = current.id ? await updateAgent(current.id, { ...current, skill_ids: selectedSkillIds }) : await createAgent({ ...current, skill_ids: selectedSkillIds });
+      const saved = await updateAgent(current.id, { enabled: current.enabled, cli_profile: current.cli_profile });
       setAgent(saved);
-      setSelectedSkillIds((saved.skills || []).map((skill) => skill.id));
       onSaved(saved.id);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  async function improvePrompt() {
-    const current = agent;
-    if (!current?.id) {
-      setError("Save the agent before improving its base prompt.");
-      return;
-    }
-    setImproving(true);
-    try {
-      const improved = await improveAgentPrompt(current.id, { ...current, skill_ids: selectedSkillIds });
-      setAgent({ ...current, role_prompt: improved.role_prompt });
-    } catch (e) { setError((e as Error).message); } finally { setImproving(false); }
-  }
 
-  return <Panel title={agent.id ? agent.name : "New agent"}>
+  return <Panel title={agent.name}>
     <div className="editor">
-      <input value={agent.name} onChange={(e) => setAgent({ ...agent, name: e.target.value })} placeholder="Name" />
-      <input value={agent.role} onChange={(e) => setAgent({ ...agent, role: e.target.value })} placeholder="Role" />
-      <select value={agent.cli_kind} onChange={(e) => setAgent({ ...agent, cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
-      <textarea value={agent.role_prompt} onChange={(e) => setAgent({ ...agent, role_prompt: e.target.value })} placeholder="Role prompt" />
+      <input value={agent.name} readOnly aria-label="Agent name" />
+      <input value={agent.role} readOnly aria-label="Agent role" />
+      <input value={agent.cli_kind} readOnly aria-label="Agent CLI" />
       <label><input type="checkbox" checked={agent.enabled} onChange={(e) => setAgent({ ...agent, enabled: e.target.checked })} /> Enabled</label>
+      <h2 className="section-title">Base Prompt</h2>
+      <pre>{agent.base_prompt || agent.role_prompt}</pre>
       <h2 className="section-title">Skills</h2>
-      <div className="skill-picker">{skills.map((skill) => <label key={skill.id}><input type="checkbox" checked={selectedSkillIds.includes(skill.id)} onChange={(e) => toggleSkill(skill.id, e.target.checked)} /> <span>{skill.name}</span></label>)}</div>
+      <div className="skill-picker">{(agent.skills || []).map((skill) => <label key={skill.id}><input type="checkbox" checked readOnly /> <span>{skill.name}</span></label>)}</div>
+      {agent.definition_hash && <p className="empty-state">Definition hash: {agent.definition_hash}</p>}
       <div className="toolbar">
         <button onClick={save} disabled={busy}><Save size={16} /> Save</button>
-        {agent.id && <button onClick={improvePrompt} disabled={improving}><RefreshCw size={16} /> Improve prompt</button>}
         {agent.id && <button onClick={async () => setAgent(await setAgentEnabled(agent.id, !agent.enabled))}>{agent.enabled ? "Disable" : "Enable"}</button>}
-        {agent.id && <button onClick={async () => { const copy = await duplicateAgent(agent.id); onSaved(copy.id); }}><Copy size={16} /> Duplicate</button>}
-        {agent.id && <button onClick={async () => { await deleteAgent(agent.id); onDeleted(); }}><Trash2 size={16} /> Delete</button>}
       </div>
     </div>
     <Error text={error} />

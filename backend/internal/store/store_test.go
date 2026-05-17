@@ -152,3 +152,51 @@ func TestCreateTaskReturnsClearUnknownAssigneeError(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUpdateAgentRuntimeDoesNotChangePromptNameRoleOrSkills(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	agentRows := func(enabled bool) *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"id", "name", "role", "role_prompt", "cli_kind", "cli_profile", "enabled", "created_at", "updated_at"}).
+			AddRow("pm", "PM Agent", "pm", "repo prompt", "codex", nil, enabled, now, now)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM agents WHERE id=$1")).
+		WithArgs("pm").
+		WillReturnRows(agentRows(true))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.* FROM skills s JOIN agent_skills a ON a.skill_id=s.id WHERE a.agent_id=$1 ORDER BY s.name`)).
+		WithArgs("pm").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "created_at", "updated_at"}))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE agents SET cli_profile=$2, enabled=$3, updated_at=now() WHERE id=$1`)).
+		WithArgs("pm", nil, false).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM agents WHERE id=$1")).
+		WithArgs("pm").
+		WillReturnRows(agentRows(false))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.* FROM skills s JOIN agent_skills a ON a.skill_id=s.id WHERE a.agent_id=$1 ORDER BY s.name`)).
+		WithArgs("pm").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "created_at", "updated_at"}))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	enabled := false
+	agent, err := store.UpdateAgentRuntime(context.Background(), "pm", AgentInput{
+		Name:       "Changed",
+		Role:       "changed",
+		RolePrompt: "changed prompt",
+		SkillIDs:   []string{"other"},
+		Enabled:    &enabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Name != "PM Agent" || agent.Role != "pm" || agent.RolePrompt != "repo prompt" || agent.Enabled {
+		t.Fatalf("unexpected runtime update result: %+v", agent)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

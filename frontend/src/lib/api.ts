@@ -3,6 +3,8 @@ export type Agent = {
   name: string;
   role: string;
   role_prompt: string;
+  base_prompt?: string;
+  definition_hash?: string;
   cli_kind: "claude" | "codex";
   cli_profile: string | null;
   enabled: boolean;

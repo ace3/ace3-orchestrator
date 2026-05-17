@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
+	"mini-paperclip/backend/internal/agentdefs"
 	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/store"
 )
@@ -45,9 +46,6 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 	status, err := s.Status(ctx)
 	if err != nil {
 		return status, err
-	}
-	if status.Bootstrapped {
-		return status, nil
 	}
 	seeds, err := loadSeeds()
 	if err != nil {
@@ -80,27 +78,46 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 	if err != nil {
 		return status, err
 	}
-	for _, agent := range seeds.Agents {
-		enabled := true
-		skillIDs := make([]string, 0, len(agent.Skills))
-		for _, name := range agent.Skills {
-			if skill, ok := skillsByName[name]; ok {
-				skillIDs = append(skillIDs, skill.ID)
-			}
+	if err := s.SyncAgentDefinitions(ctx, skillsByName); err != nil {
+		return status, err
+	}
+	return s.Status(ctx)
+}
+
+func (s *Service) SyncAgentDefinitions(ctx context.Context, skillsByName map[string]models.Skill) error {
+	defs, err := agentdefs.Load()
+	if err != nil {
+		return err
+	}
+	if skillsByName == nil {
+		skillsByName, err = s.skillsByName(ctx)
+		if err != nil {
+			return err
 		}
-		if _, err := s.store.CreateAgent(ctx, store.AgentInput{
-			ID:         agent.ID,
-			Name:       agent.Name,
-			Role:       agent.Role,
-			RolePrompt: agent.RolePrompt,
-			CLIKind:    agent.CLIKind,
+	}
+	for _, def := range defs {
+		enabled := true
+		skillIDs := make([]string, 0, len(def.Skills))
+		for _, name := range def.Skills {
+			skill, ok := skillsByName[name]
+			if !ok {
+				return fmt.Errorf("agent %q requires missing skill %q", def.ID, name)
+			}
+			skillIDs = append(skillIDs, skill.ID)
+		}
+		if _, err := s.store.SyncRepoAgent(ctx, store.AgentInput{
+			ID:         def.ID,
+			Name:       def.Name,
+			Role:       def.Role,
+			RolePrompt: def.BasePrompt,
+			CLIKind:    def.CLIKind,
 			Enabled:    &enabled,
 			SkillIDs:   skillIDs,
 		}); err != nil {
-			return status, err
+			return err
 		}
 	}
-	return s.Status(ctx)
+	return nil
 }
 
 func (s *Service) SyncSource(ctx context.Context, id string) error {
@@ -255,7 +272,6 @@ func (s *Service) skillsByName(ctx context.Context) (map[string]models.Skill, er
 
 type seedConfig struct {
 	SkillSources []seedSource `yaml:"skill_sources"`
-	Agents       []seedAgent  `yaml:"agents"`
 }
 
 type seedSource struct {
@@ -264,15 +280,6 @@ type seedSource struct {
 	UpstreamURL string `yaml:"upstream_url"`
 	PinnedSHA   string `yaml:"pinned_sha"`
 	Kind        string `yaml:"kind"`
-}
-
-type seedAgent struct {
-	ID         string   `yaml:"id"`
-	Name       string   `yaml:"name"`
-	Role       string   `yaml:"role"`
-	CLIKind    string   `yaml:"cli_kind"`
-	RolePrompt string   `yaml:"role_prompt"`
-	Skills     []string `yaml:"skills"`
 }
 
 func loadSeeds() (seedConfig, error) {
