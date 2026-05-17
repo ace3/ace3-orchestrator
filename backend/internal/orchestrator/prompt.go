@@ -8,13 +8,25 @@ import (
 	"mini-paperclip/backend/internal/repoconfig"
 )
 
+type SkillDoc struct {
+	Skill   models.Skill
+	Source  string
+	Path    string
+	Content string
+}
+
 func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact) string {
+	return BuildPromptWithSkillDocs(agent, task, repo, comments, artifacts, nil)
+}
+
+func BuildPromptWithSkillDocs(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact, skillDocs []SkillDoc) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== AGENT ===\nID: %s\nName: %s\nRole: %s\n\n", agent.ID, agent.Name, agent.Role)
 	fmt.Fprintf(&b, "=== ACTIVE SKILLS ===\n")
 	for _, skill := range agent.Skills {
 		fmt.Fprintf(&b, "- %s\n", skill.Name)
 	}
+	writeSkillDocs(&b, skillDocs)
 	fmt.Fprintf(&b, "\n=== TASK ===\nID: %s\nTitle: %s\nDescription: %s\nStatus: %s\nPriority: %d\n", task.ID, task.Title, task.Description, task.Status, task.Priority)
 	if task.ParentID != nil {
 		fmt.Fprintf(&b, "Parent: %s\n", *task.ParentID)
@@ -45,6 +57,8 @@ func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, commen
 		}
 	}
 	b.WriteString(`
+
+Use only the active skills and skill instructions embedded in this prompt for this run. Do not invoke, assume, or rely on globally installed Codex or Claude skills/plugins unless the embedded active skill instructions explicitly require it and it is necessary to complete the task.
 
 Do not run or suggest shell forms that fetch remote code or bypass local review, including curl, wget, curl|sh, python -c, python3 -c, perl -e, sudo, or Docker socket access.
 
@@ -78,6 +92,32 @@ Routing notes:
 - Use "attachments" to persist PM docs, PM handoffs, EM docs, EM handoffs, QA reports, implementation notes, and run logs as durable task artifacts.
 - Legacy "file" and "log" attachments are accepted and stored as metadata-only artifacts when no body is provided.`)
 	return b.String()
+}
+
+func writeSkillDocs(b *strings.Builder, skillDocs []SkillDoc) {
+	fmt.Fprintf(b, "\n=== ACTIVE SKILL INSTRUCTIONS ===\n")
+	if len(skillDocs) == 0 {
+		b.WriteString("(no SKILL.md content available)\n")
+		return
+	}
+	for _, doc := range skillDocs {
+		fmt.Fprintf(b, "--- %s", doc.Skill.Name)
+		if doc.Source != "" {
+			fmt.Fprintf(b, " from %s", doc.Source)
+		}
+		if doc.Path != "" {
+			fmt.Fprintf(b, " at %s", doc.Path)
+		}
+		b.WriteString(" ---\n")
+		content := doc.Content
+		if len(content) > 12000 {
+			content = content[:12000] + "\n[truncated]"
+		}
+		b.WriteString(content)
+		if !strings.HasSuffix(content, "\n") {
+			b.WriteString("\n")
+		}
+	}
 }
 
 func writeLifecycleSection(b *strings.Builder, task models.Task, currentAgent string) {

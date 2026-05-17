@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"mini-paperclip/backend/internal/agentdefs"
@@ -130,6 +131,14 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 	agent = agentdefs.Apply(agent, def, defSkills)
 	defHash := agentdefs.Hash(def)
 	o.store.AppendRunEvent(ctx, run.ID, "info", "agent definition hash: "+defHash)
+	skillDocs, warnings, err := o.loadSkillDocs(ctx, agent.Skills)
+	if err != nil {
+		o.failRun(ctx, run, "", fmt.Errorf("load skill docs: %w", err))
+		return
+	}
+	for _, warning := range warnings {
+		o.store.AppendRunEvent(ctx, run.ID, "warn", "skill docs warning: "+warning)
+	}
 	worktree, cleanup, err := o.prepareWorktree(ctx, run.ID, repo)
 	if err != nil {
 		o.failRun(ctx, run, "", fmt.Errorf("prepare worktree: %w", err))
@@ -141,7 +150,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 			cleanup()
 		}
 	}()
-	prompt := BuildPrompt(agent, task, repo, comments, artifacts)
+	prompt := BuildPromptWithSkillDocs(agent, task, repo, comments, artifacts, skillDocs)
 	result, err := runner.Run(ctx, RunRequest{
 		Prompt:       prompt,
 		SystemPrompt: def.BasePrompt,
@@ -185,6 +194,47 @@ func (o *Orchestrator) failRun(ctx context.Context, run models.Run, prompt strin
 
 func hashablePrompt(systemPrompt, taskPrompt string) string {
 	return "System instructions:\n" + systemPrompt + "\n\nTask prompt:\n" + taskPrompt
+}
+
+func (o *Orchestrator) loadSkillDocs(ctx context.Context, skills []models.Skill) ([]SkillDoc, []string, error) {
+	if len(skills) == 0 {
+		return nil, nil, nil
+	}
+	sources, err := o.store.ListSkillSources(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	sourcesByID := make(map[string]models.SkillSource, len(sources))
+	for _, source := range sources {
+		sourcesByID[source.ID] = source
+	}
+	docs := make([]SkillDoc, 0, len(skills))
+	var warnings []string
+	for _, skill := range skills {
+		source, ok := sourcesByID[skill.SourceID]
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("skill %q references missing source %q", skill.Name, skill.SourceID))
+			continue
+		}
+		rel := filepath.Clean(skill.PathInSource)
+		if filepath.IsAbs(rel) || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+			warnings = append(warnings, fmt.Sprintf("skill %q has invalid path %q", skill.Name, skill.PathInSource))
+			continue
+		}
+		path := filepath.Join(o.cfg.SkillsCacheDir, source.Name, source.PinnedSHA, rel)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("read skill %q from %s: %v", skill.Name, path, err))
+			continue
+		}
+		docs = append(docs, SkillDoc{
+			Skill:   skill,
+			Source:  source.Name,
+			Path:    rel,
+			Content: string(content),
+		})
+	}
+	return docs, warnings, nil
 }
 
 func (o *Orchestrator) prepareWorktree(ctx context.Context, runID string, repo *models.Repo) (string, func(), error) {

@@ -95,3 +95,29 @@ func TestBuildPromptIncludesTaskArtifacts(t *testing.T) {
 		t.Fatalf("prompt did not include artifact context:\n%s", prompt)
 	}
 }
+
+func TestBuildPromptIncludesActiveSkillInstructions(t *testing.T) {
+	prompt := BuildPromptWithSkillDocs(
+		models.Agent{
+			ID:     "backend",
+			Name:   "Backend Agent",
+			Role:   "backend",
+			Skills: []models.Skill{{ID: "skill-1", Name: "backend-developer"}},
+		},
+		models.Task{ID: "task-1", Title: "Build API", Status: "todo"},
+		nil,
+		nil,
+		nil,
+		[]SkillDoc{{
+			Skill:   models.Skill{ID: "skill-1", Name: "backend-developer"},
+			Source:  "ace3",
+			Path:    "skills/backend-developer/SKILL.md",
+			Content: "Use repository-local backend conventions.",
+		}},
+	)
+	if !strings.Contains(prompt, "=== ACTIVE SKILL INSTRUCTIONS ===") ||
+		!strings.Contains(prompt, "Use repository-local backend conventions.") ||
+		!strings.Contains(prompt, "Use only the active skills and skill instructions embedded in this prompt") {
+		t.Fatalf("prompt did not include active skill instructions:\n%s", prompt)
+	}
+}

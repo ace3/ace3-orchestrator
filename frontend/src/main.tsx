@@ -56,6 +56,11 @@ type RouteState = {
   agentId: string | null;
 };
 
+type BootstrapState =
+  | { phase: "loading" }
+  | { phase: "ready"; status: BootstrapStatus }
+  | { phase: "error"; message: string };
+
 function routeFromPath(pathname = window.location.pathname): RouteState {
   const parts = pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
   if (parts[0] === "bootstrap") return { route: "bootstrap", projectId: null, agentId: null };
@@ -142,7 +147,7 @@ function App() {
   const [projectId, setProjectId] = useState<string | null>(initialRoute.projectId);
   const [agentId, setAgentId] = useState<string | null>(initialRoute.agentId);
   const [token, updateToken] = useState(getToken());
-  const [bootstrapStatus, setBootstrapStatus] = useState<BootstrapStatus | null>(null);
+  const [bootstrapState, setBootstrapState] = useState<BootstrapState>({ phase: "loading" });
 
   function applyRoute(next: RouteState) {
     setProjectId(next.projectId);
@@ -161,15 +166,17 @@ function App() {
   useEffect(() => {
     getBootstrapStatus()
       .then((status) => {
-        setBootstrapStatus(status);
+        setBootstrapState({ phase: "ready", status });
         if (!status.bootstrapped) {
           navigate("bootstrap", undefined, true);
         } else if (routeFromPath().route === "bootstrap") {
           navigate("projects", undefined, true);
         }
       })
-      .catch(() => navigate("bootstrap", undefined, true));
+      .catch((error) => setBootstrapState({ phase: "error", message: (error as Error).message }));
   }, []);
+
+  const showBootstrapNav = bootstrapState.phase === "ready" && !bootstrapState.status.bootstrapped;
 
   function navigate(next: Route, id?: string, replace = false) {
     const path = pathForRoute(next, id);
@@ -187,7 +194,7 @@ function App() {
     <main>
       <aside>
         <div className="brand"><Boxes size={22} /> mini-Paperclip</div>
-        {!bootstrapStatus?.bootstrapped && <button className={route === "bootstrap" ? "active" : ""} onClick={() => navigate("bootstrap")}>Bootstrap</button>}
+        {showBootstrapNav && <button className={route === "bootstrap" ? "active" : ""} onClick={() => navigate("bootstrap")}>Bootstrap</button>}
         <button className={route === "projects" || route === "project" || route === "board" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
         <button className={route === "agents" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
@@ -197,7 +204,7 @@ function App() {
         </div>
       </aside>
       <section>
-        {route === "bootstrap" && <BootstrapPage bootstrapStatus={bootstrapStatus} onStatus={setBootstrapStatus} onDone={(status) => { setBootstrapStatus(status); navigate("projects"); }} />}
+        {route === "bootstrap" && <BootstrapPage bootstrapState={bootstrapState} onDone={(status) => { setBootstrapState({ phase: "ready", status }); navigate("projects"); }} />}
         {route === "projects" && <ProjectsPage openProject={(id) => navigate("project", id)} openBoard={(id) => navigate("board", id)} />}
         {route === "project" && projectId && <ProjectPage id={projectId} onOpenBoard={() => navigate("board", projectId)} onDeleted={() => navigate("projects")} />}
         {route === "board" && projectId && <BoardPage id={projectId} />}
@@ -209,28 +216,24 @@ function App() {
   );
 }
 
-function BootstrapPage({ bootstrapStatus, onStatus, onDone }: { bootstrapStatus: BootstrapStatus | null; onStatus: (status: BootstrapStatus) => void; onDone: (status: BootstrapStatus) => void }) {
-  const [message, setMessage] = useState("Checking bootstrap status...");
+function BootstrapPage({ bootstrapState, onDone }: { bootstrapState: BootstrapState; onDone: (status: BootstrapStatus) => void }) {
+  const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [currentStatus, setCurrentStatus] = useState<BootstrapStatus | null>(bootstrapStatus);
 
   useEffect(() => {
-    setCurrentStatus(bootstrapStatus);
-  }, [bootstrapStatus]);
-
-  useEffect(() => {
-    getBootstrapStatus().then((status) => {
-      setCurrentStatus(status);
-      onStatus(status);
-      setMessage(status.bootstrapped ? `${status.agents_count} agents seeded.` : "Bootstrap is required.");
-    });
-  }, [onStatus]);
+    if (bootstrapState.phase === "loading") {
+      setMessage("Checking bootstrap status...");
+    } else if (bootstrapState.phase === "error") {
+      setMessage(bootstrapState.message);
+    } else {
+      setMessage(bootstrapState.status.bootstrapped ? `${bootstrapState.status.agents_count} agents seeded.` : "Bootstrap is required.");
+    }
+  }, [bootstrapState]);
 
   async function run() {
     setBusy(true);
     try {
       const status = await runBootstrap();
-      setCurrentStatus(status);
       setMessage(`${status.agents_count} agents ready.`);
       onDone(status);
     } catch (error) {
@@ -240,7 +243,9 @@ function BootstrapPage({ bootstrapStatus, onStatus, onDone }: { bootstrapStatus:
     }
   }
 
-  return <Panel title="Bootstrap"><p>{message}</p>{!currentStatus?.bootstrapped && <button onClick={run} disabled={busy}><Check size={16} /> Run bootstrap</button>}</Panel>;
+  const canRunBootstrap = bootstrapState.phase === "ready" && !bootstrapState.status.bootstrapped;
+
+  return <Panel title="Bootstrap"><p>{message}</p>{canRunBootstrap && <button onClick={run} disabled={busy}><Check size={16} /> Run bootstrap</button>}</Panel>;
 }
 
 function ProjectsPage({ openProject, openBoard }: { openProject: (id: string) => void; openBoard: (id: string) => void }) {

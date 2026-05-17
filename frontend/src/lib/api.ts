@@ -107,7 +107,15 @@ export type BootstrapStatus = {
   agents_count: number;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+function resolveAPIBase() {
+  const configured = (import.meta.env.VITE_API_BASE || "").trim();
+  if (configured === "" || configured === "/") {
+    return "/api";
+  }
+  return configured.replace(/\/+$/, "");
+}
+
+const API_BASE = resolveAPIBase();
 const TOKEN_KEY = "mini-paperclip-token";
 
 export function getToken() {
@@ -130,7 +138,19 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  const contentType = response.headers.get("Content-Type") || "";
+  const isJSON = contentType.includes("application/json") || contentType.includes("+json");
+  if (text && !isJSON) {
+    throw new Error(`API returned non-JSON for ${path} (HTTP ${response.status}). Check Vite proxy/backend URL.`);
+  }
+  let data: any = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`API returned invalid JSON for ${path}: ${(error as Error).message}`);
+    }
+  }
   if (!response.ok) {
     throw new Error(data?.error?.message || response.statusText);
   }
