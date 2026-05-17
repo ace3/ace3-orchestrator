@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -37,6 +38,73 @@ func TestListInstalledSkillsExcludesArchivedAndOrdersBySourceName(t *testing.T) 
 	}
 	if skills[0].SourceID != "ace3" || skills[0].Name != "backend-developer" {
 		t.Fatalf("unexpected first skill: %+v", skills[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateTaskArtifactPersistsStructuredContext(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs("task-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "repo_id", "title", "description", "status", "assignee_agent_id", "parent_id", "priority", "retry_count", "created_at", "updated_at"}).
+			AddRow("task-1", "project-1", nil, "Do work", "", "todo", nil, nil, 0, 0, now, now))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO task_artifacts (id, task_id, kind, title, body, format, metadata, created_by, run_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`)).
+		WithArgs(sqlmock.AnyArg(), "task-1", "pm_document", "PRD", "body", "markdown", []byte(`{"phase":"pm"}`), "api", nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_artifacts WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "task_id", "kind", "title", "body", "format", "metadata", "created_by", "run_id", "created_at", "updated_at"}).
+			AddRow("artifact-1", "task-1", "pm_document", "PRD", "body", "markdown", []byte(`{"phase":"pm"}`), "api", nil, now, now))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	body := "body"
+	artifact, err := store.CreateTaskArtifact(context.Background(), "task-1", TaskArtifactInput{
+		Kind:     "pm_document",
+		Title:    "PRD",
+		Body:     &body,
+		Metadata: []byte(`{"phase":"pm"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Kind != "pm_document" || artifact.Title != "PRD" {
+		t.Fatalf("unexpected artifact: %+v", artifact)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteTaskArtifactRejectsRunCreatedArtifacts(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	runID := "run-1"
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_artifacts WHERE id=$1")).
+		WithArgs("artifact-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "task_id", "kind", "title", "body", "format", "metadata", "created_by", "run_id", "created_at", "updated_at"}).
+			AddRow("artifact-1", "task-1", "run_log", "Run log", "", "text", []byte(`{}`), "agent:qa", runID, now, now))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	err = store.DeleteTaskArtifact(context.Background(), "artifact-1")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("got %v, want ErrConflict", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

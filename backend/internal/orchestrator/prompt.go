@@ -8,7 +8,7 @@ import (
 	"mini-paperclip/backend/internal/repoconfig"
 )
 
-func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment) string {
+func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== AGENT ===\nID: %s\nName: %s\nRole: %s\n\n", agent.ID, agent.Name, agent.Role)
 	fmt.Fprintf(&b, "=== ACTIVE SKILLS ===\n")
@@ -29,6 +29,20 @@ func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, commen
 	fmt.Fprintf(&b, "\n=== RECENT COMMENTS ===\n")
 	for _, comment := range comments {
 		fmt.Fprintf(&b, "[%s] %s\n", comment.Author, comment.Body)
+	}
+	fmt.Fprintf(&b, "\n=== TASK ARTIFACTS ===\n")
+	if len(artifacts) == 0 {
+		b.WriteString("(none)\n")
+	}
+	for _, artifact := range artifacts {
+		fmt.Fprintf(&b, "[%s] %s by %s\n", artifact.Kind, artifact.Title, artifact.CreatedBy)
+		if artifact.Body != "" {
+			body := artifact.Body
+			if len(body) > 3000 {
+				body = body[:3000] + "\n[truncated]"
+			}
+			fmt.Fprintf(&b, "%s\n", body)
+		}
 	}
 	b.WriteString(`
 
@@ -51,7 +65,7 @@ Respond ONLY with a single JSON object matching this schema. No markdown, prose,
       }
     ],
     "attachments": [
-      {"kind": "file|log", "path": "relative/path/in/worktree", "note": "string"}
+      {"kind": "pm_document|pm_handoff|em_document|em_handoff|qa_report|implementation_note|run_log|other|file|log", "title": "string", "body": "string", "format": "markdown|text|json", "path": "relative/path/in/worktree", "note": "string", "metadata": {}}
     ]
   }
 }
@@ -60,7 +74,9 @@ Routing notes:
 - If you set "reassign_to", that explicit choice overrides the lifecycle.
 - If you omit "reassign_to" and set status to "done", the task auto-advances to
   the next non-skipped step shown under "PLANNED REMAINING STEPS" below.
-- Use "request_human_review" when you need a human to inspect before advancing.`)
+- Use "request_human_review" when you need a human to inspect before advancing.
+- Use "attachments" to persist PM docs, PM handoffs, EM docs, EM handoffs, QA reports, implementation notes, and run logs as durable task artifacts.
+- Legacy "file" and "log" attachments are accepted and stored as metadata-only artifacts when no body is provided.`)
 	return b.String()
 }
 

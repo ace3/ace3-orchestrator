@@ -107,7 +107,7 @@ func (o *Orchestrator) worker(ctx context.Context, index int) {
 }
 
 func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
-	agent, task, repo, comments, err := o.store.TaskContext(ctx, run)
+	agent, task, repo, comments, artifacts, err := o.store.TaskContext(ctx, run)
 	if err != nil {
 		o.failRun(ctx, run, "", fmt.Errorf("load task context: %w", err))
 		return
@@ -141,7 +141,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 			cleanup()
 		}
 	}()
-	prompt := BuildPrompt(agent, task, repo, comments)
+	prompt := BuildPrompt(agent, task, repo, comments, artifacts)
 	result, err := runner.Run(ctx, RunRequest{
 		Prompt:       prompt,
 		SystemPrompt: def.BasePrompt,
@@ -163,7 +163,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
 		return
 	}
-	if err := o.store.ApplyAgentResponse(ctx, tx, task, agent, result.Parsed); err != nil {
+	if err := o.store.ApplyAgentResponse(ctx, tx, task, agent, result.Parsed, &run.ID); err != nil {
 		_ = tx.Rollback()
 		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
 		return

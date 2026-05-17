@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/lib/pq"
@@ -80,6 +81,20 @@ type Task struct {
 	LifecycleID     string         `db:"lifecycle_id" json:"lifecycle_id"`
 	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
+}
+
+type TaskArtifact struct {
+	ID        string          `db:"id" json:"id"`
+	TaskID    string          `db:"task_id" json:"task_id"`
+	Kind      string          `db:"kind" json:"kind"`
+	Title     string          `db:"title" json:"title"`
+	Body      string          `db:"body" json:"body"`
+	Format    string          `db:"format" json:"format"`
+	Metadata  json.RawMessage `db:"metadata" json:"metadata"`
+	CreatedBy string          `db:"created_by" json:"created_by"`
+	RunID     *string         `db:"run_id" json:"run_id"`
+	CreatedAt time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 type Comment struct {

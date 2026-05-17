@@ -118,10 +118,10 @@ The very first time the backend boots and finds zero agents, the UI redirects to
 
    | Agent | Source | Skills (from upstream) | CLI default |
    |---|---|---|---|
-   | **PM Agent** | verzth | `product-manager`, `prd`, `research` | claude |
-   | **EM Agent** | verzth | `engineering-manager`, `autoplan`, `plan-eng-review` | claude |
-   | **Backend Agent** | ace3 | `backend-developer`, `golang-engineer`, `nobi-golang-pattern` | claude |
-   | **Frontend Agent** | ace3 | `frontend-developer`, `frontend-design`, `design-html` | claude |
+   | **PM Agent** | ace3 | `product-manager`, `research` | claude |
+   | **EM Agent** | ace3 | `engineering-manager` | claude |
+   | **Backend Agent** | ace3 | `backend-developer` | claude |
+   | **Frontend Agent** | ace3 | `frontend-developer` | claude |
    | **QA Agent** | ace3 | `qa-manager`, `qa-engineer`, `qa-tester` | claude |
 
    (User can fully edit/replace these post-seed.)

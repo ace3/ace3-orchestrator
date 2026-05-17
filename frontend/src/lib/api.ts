@@ -52,6 +52,20 @@ export type Task = {
   retry_count: number;
 };
 
+export type TaskArtifact = {
+  id: string;
+  task_id: string;
+  kind: "pm_document" | "pm_handoff" | "em_document" | "em_handoff" | "qa_report" | "implementation_note" | "run_log" | "other";
+  title: string;
+  body: string;
+  format: "markdown" | "text" | "json";
+  metadata: Record<string, unknown>;
+  created_by: string;
+  run_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Comment = {
   id: string;
   task_id: string;
@@ -145,6 +159,10 @@ export const createTask = (projectId: string, body: Partial<Task>) => api<Task>(
 export const updateTask = (id: string, body: Partial<Task>) => api<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const listComments = (taskId: string) => api<Comment[]>(`/tasks/${taskId}/comments`);
 export const addComment = (taskId: string, body: string) => api<Comment>(`/tasks/${taskId}/comments`, { method: "POST", body: JSON.stringify({ body }) });
+export const listTaskArtifacts = (taskId: string) => api<TaskArtifact[]>(`/tasks/${taskId}/artifacts`);
+export const createTaskArtifact = (taskId: string, body: Partial<TaskArtifact>) => api<TaskArtifact>(`/tasks/${taskId}/artifacts`, { method: "POST", body: JSON.stringify(body) });
+export const updateTaskArtifact = (id: string, body: Partial<TaskArtifact>) => api<TaskArtifact>(`/task-artifacts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+export const deleteTaskArtifact = (id: string) => api<{ deleted: boolean }>(`/task-artifacts/${id}`, { method: "DELETE" });
 export const runTask = (taskId: string) => api<Run>(`/tasks/${taskId}/run`, { method: "POST" });
 export const listRuns = (taskId: string) => api<Run[]>(`/tasks/${taskId}/runs`);
 export const listRunEvents = (runId: string, since = 0) => api<RunEvent[]>(`/runs/${runId}/events?since=${since}`);

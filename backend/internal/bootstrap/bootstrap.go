@@ -336,4 +336,3 @@ func (s *Service) skillsByName(ctx context.Context) (map[string]models.Skill, er
 	}
 	return out, nil
 }
-

@@ -91,3 +91,7 @@ Docker uses named volumes:
 - `mini-paperclip_mp_worktrees`
 
 `docker compose down` preserves those volumes. `docker compose down -v` removes them and is destructive.
+
+## REST API
+
+See `docs/rest-api.md` for task, artifact, run, heartbeat, and error contracts. Task artifacts are the durable context channel for PM documents, handoffs, engineering plans, QA reports, implementation notes, and run logs.

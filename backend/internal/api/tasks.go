@@ -59,6 +59,48 @@ func (a *API) addComment(w http.ResponseWriter, r *http.Request) {
 	respondCreated(w, comment, err)
 }
 
+func (a *API) listTaskArtifacts(w http.ResponseWriter, r *http.Request) {
+	artifacts, err := a.store.ListTaskArtifacts(r.Context(), chi.URLParam(r, "id"))
+	respond(w, artifacts, err)
+}
+
+func (a *API) createTaskArtifact(w http.ResponseWriter, r *http.Request) {
+	var in store.TaskArtifactInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if in.CreatedBy == "" {
+		in.CreatedBy = "api"
+	}
+	artifact, err := a.store.CreateTaskArtifact(r.Context(), chi.URLParam(r, "id"), in)
+	respondCreated(w, artifact, err)
+}
+
+func (a *API) getTaskArtifact(w http.ResponseWriter, r *http.Request) {
+	artifact, err := a.store.GetTaskArtifact(r.Context(), chi.URLParam(r, "id"))
+	respond(w, artifact, err)
+}
+
+func (a *API) updateTaskArtifact(w http.ResponseWriter, r *http.Request) {
+	var in store.TaskArtifactInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	artifact, err := a.store.UpdateTaskArtifact(r.Context(), chi.URLParam(r, "id"), in)
+	respond(w, artifact, err)
+}
+
+func (a *API) deleteTaskArtifact(w http.ResponseWriter, r *http.Request) {
+	err := a.store.DeleteTaskArtifact(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
 func (a *API) runTask(w http.ResponseWriter, r *http.Request) {
 	run, err := a.orch.EnqueueTask(r.Context(), chi.URLParam(r, "id"))
 	respondCreated(w, run, err)

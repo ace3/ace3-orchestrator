@@ -2,7 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"mini-paperclip/backend/internal/models"
 )
 
 func TestParseAgentResponse(t *testing.T) {
@@ -77,5 +80,18 @@ func TestHashablePromptIncludesSystemPrompt(t *testing.T) {
 	taskPrompt := "task"
 	if hashablePrompt("system-a", taskPrompt) == hashablePrompt("system-b", taskPrompt) {
 		t.Fatal("definition prompt changes must affect run prompt hash input")
+	}
+}
+
+func TestBuildPromptIncludesTaskArtifacts(t *testing.T) {
+	prompt := BuildPrompt(
+		models.Agent{ID: "em", Name: "EM Agent", Role: "em"},
+		models.Task{ID: "task-1", Title: "Build API", Status: "todo"},
+		nil,
+		nil,
+		[]models.TaskArtifact{{Kind: "pm_document", Title: "PRD", Body: "Acceptance criteria", CreatedBy: "api"}},
+	)
+	if !strings.Contains(prompt, "=== TASK ARTIFACTS ===") || !strings.Contains(prompt, "[pm_document] PRD by api") || !strings.Contains(prompt, "Acceptance criteria") {
+		t.Fatalf("prompt did not include artifact context:\n%s", prompt)
 	}
 }

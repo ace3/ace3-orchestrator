@@ -12,10 +12,13 @@ import {
   Skill,
   SkillSource,
   Task,
+  TaskArtifact,
   addComment,
   addRepo,
+  createTaskArtifact,
   createProject,
   createTask,
+  deleteTaskArtifact,
   deleteProject,
   deleteRepo,
   eventsURL,
@@ -32,6 +35,7 @@ import {
   listRuns,
   listSkillSources,
   listTasks,
+  listTaskArtifacts,
   pinSkillSource,
   runBootstrap,
   runTask,
@@ -39,6 +43,7 @@ import {
   setToken,
   syncSkillSource,
   updateAgent,
+  updateTaskArtifact,
   updateTask,
   updateProject
 } from "./lib/api";
@@ -395,6 +400,17 @@ type StatusFilter = "all" | Task["status"];
 type AssigneeFilter = "all" | "unassigned" | string;
 
 const TASK_STATUSES: Task["status"][] = ["todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+const ARTIFACT_KINDS: TaskArtifact["kind"][] = ["pm_document", "pm_handoff", "em_document", "em_handoff", "qa_report", "implementation_note", "run_log", "other"];
+const ARTIFACT_LABELS: Record<TaskArtifact["kind"], string> = {
+  pm_document: "PM Document",
+  pm_handoff: "PM Handoff",
+  em_document: "EM Document",
+  em_handoff: "EM Handoff",
+  qa_report: "QA Report",
+  implementation_note: "Implementation Note",
+  run_log: "Run Log",
+  other: "Other",
+};
 
 function readStatusFilter(): StatusFilter {
   const value = new URLSearchParams(window.location.search).get("status");
@@ -604,12 +620,16 @@ function Kanban({ tasks, agents, onOpen, onMove }: { tasks: Task[]; agents: Agen
 
 function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: Agent[]; onClose: () => void; onRefresh: () => Promise<void> }) {
   const [comments, setComments] = useState<Comment[]>([]);
+  const [artifacts, setArtifacts] = useState<TaskArtifact[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [comment, setComment] = useState("");
+  const [artifactForm, setArtifactForm] = useState<{ kind: TaskArtifact["kind"]; title: string; body: string; format: TaskArtifact["format"] }>({ kind: "pm_document", title: "", body: "", format: "markdown" });
+  const [editingArtifact, setEditingArtifact] = useState<TaskArtifact | null>(null);
   const latestRun = runs[0];
   useEffect(() => {
     listComments(task.id).then(setComments);
+    listTaskArtifacts(task.id).then(setArtifacts);
     listRuns(task.id).then(setRuns);
   }, [task.id]);
   useEffect(() => {
@@ -620,11 +640,82 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     }, 1500);
     return () => window.clearInterval(timer);
   }, [latestRun?.id, events]);
+  async function refreshArtifacts() {
+    setArtifacts(await listTaskArtifacts(task.id));
+  }
+  async function submitArtifact(event: React.FormEvent) {
+    event.preventDefault();
+    await createTaskArtifact(task.id, { ...artifactForm, metadata: {} });
+    setArtifactForm({ kind: "pm_document", title: "", body: "", format: "markdown" });
+    await refreshArtifacts();
+  }
+  async function saveArtifact(event: React.FormEvent) {
+    event.preventDefault();
+    if (!editingArtifact) return;
+    await updateTaskArtifact(editingArtifact.id, {
+      kind: editingArtifact.kind,
+      title: editingArtifact.title,
+      body: editingArtifact.body,
+      format: editingArtifact.format,
+      metadata: editingArtifact.metadata,
+    });
+    setEditingArtifact(null);
+    await refreshArtifacts();
+  }
   return <div className="drawer">
     <div className="drawer-header"><h2>{task.title}</h2><button onClick={onClose}>Close</button></div>
     <p>{task.description || "No description"}</p>
     <span>{agents.find((agent) => agent.id === task.assignee_agent_id)?.name || "Unassigned"} · {task.status} · retries {task.retry_count}</span>
     <div className="toolbar"><button onClick={async () => { await runTask(task.id); await onRefresh(); setRuns(await listRuns(task.id)); }}><Play size={16} /> Run now</button></div>
+    <h3>Artifacts</h3>
+    <div className="artifacts">
+      {artifacts.length === 0 && <p>No artifacts yet.</p>}
+      {artifacts.map((artifact) => (
+        <article key={artifact.id} className="artifact-item">
+          {editingArtifact?.id === artifact.id ? (
+            <form className="artifact-form" onSubmit={saveArtifact}>
+              <div className="artifact-grid">
+                <select value={editingArtifact.kind} onChange={(e) => setEditingArtifact({ ...editingArtifact, kind: e.target.value as TaskArtifact["kind"] })}>
+                  {ARTIFACT_KINDS.map((kind) => <option key={kind} value={kind}>{ARTIFACT_LABELS[kind]}</option>)}
+                </select>
+                <select value={editingArtifact.format} onChange={(e) => setEditingArtifact({ ...editingArtifact, format: e.target.value as TaskArtifact["format"] })}>
+                  <option value="markdown">Markdown</option>
+                  <option value="text">Text</option>
+                  <option value="json">JSON</option>
+                </select>
+              </div>
+              <input value={editingArtifact.title} onChange={(e) => setEditingArtifact({ ...editingArtifact, title: e.target.value })} required />
+              <textarea value={editingArtifact.body} onChange={(e) => setEditingArtifact({ ...editingArtifact, body: e.target.value })} />
+              <div className="toolbar"><button><Save size={16} /> Save</button><button type="button" onClick={() => setEditingArtifact(null)}>Cancel</button></div>
+            </form>
+          ) : (
+            <>
+              <div className="artifact-head"><strong>{artifact.title}</strong><span>{ARTIFACT_LABELS[artifact.kind]} · {artifact.format} · {artifact.created_by}</span></div>
+              {artifact.body && <pre>{artifact.body}</pre>}
+              <div className="toolbar">
+                <button type="button" onClick={() => setEditingArtifact(artifact)}><Save size={16} /> Edit</button>
+                {!artifact.run_id && <button type="button" onClick={async () => { await deleteTaskArtifact(artifact.id); await refreshArtifacts(); }}><Trash2 size={16} /> Delete</button>}
+              </div>
+            </>
+          )}
+        </article>
+      ))}
+    </div>
+    <form className="artifact-form" onSubmit={submitArtifact}>
+      <div className="artifact-grid">
+        <select value={artifactForm.kind} onChange={(e) => setArtifactForm({ ...artifactForm, kind: e.target.value as TaskArtifact["kind"] })}>
+          {ARTIFACT_KINDS.map((kind) => <option key={kind} value={kind}>{ARTIFACT_LABELS[kind]}</option>)}
+        </select>
+        <select value={artifactForm.format} onChange={(e) => setArtifactForm({ ...artifactForm, format: e.target.value as TaskArtifact["format"] })}>
+          <option value="markdown">Markdown</option>
+          <option value="text">Text</option>
+          <option value="json">JSON</option>
+        </select>
+      </div>
+      <input value={artifactForm.title} onChange={(e) => setArtifactForm({ ...artifactForm, title: e.target.value })} placeholder="Artifact title" required />
+      <textarea value={artifactForm.body} onChange={(e) => setArtifactForm({ ...artifactForm, body: e.target.value })} placeholder="Artifact body" />
+      <button><Plus size={16} /> Add artifact</button>
+    </form>
     <h3>Comments</h3>
     <div className="timeline">{comments.map((item) => <p key={item.id}><strong>{item.author}</strong>: {item.body}</p>)}</div>
     <form className="comment-form" onSubmit={async (e) => { e.preventDefault(); await addComment(task.id, comment); setComment(""); setComments(await listComments(task.id)); }}><input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add comment" /><button><MessageSquare size={16} /> Comment</button></form>

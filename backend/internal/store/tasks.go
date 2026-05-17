@@ -36,6 +36,16 @@ type CommentInput struct {
 	Body string `json:"body"`
 }
 
+type TaskArtifactInput struct {
+	Kind      string          `json:"kind"`
+	Title     string          `json:"title"`
+	Body      *string         `json:"body"`
+	Format    string          `json:"format"`
+	Metadata  json.RawMessage `json:"metadata"`
+	CreatedBy string          `json:"created_by"`
+	RunID     *string         `json:"run_id"`
+}
+
 type EventPayload struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
@@ -147,6 +157,131 @@ func (s *Store) AddComment(ctx context.Context, taskID, author, body string) (mo
 	}
 	s.Notify(ctx, "comment", taskID)
 	return comment, nil
+}
+
+func (s *Store) ListTaskArtifacts(ctx context.Context, taskID string) ([]models.TaskArtifact, error) {
+	artifacts := []models.TaskArtifact{}
+	return artifacts, s.db.SelectContext(ctx, &artifacts, "SELECT * FROM task_artifacts WHERE task_id=$1 ORDER BY updated_at DESC, created_at DESC", taskID)
+}
+
+func (s *Store) GetTaskArtifact(ctx context.Context, id string) (models.TaskArtifact, error) {
+	var artifact models.TaskArtifact
+	if err := s.db.GetContext(ctx, &artifact, "SELECT * FROM task_artifacts WHERE id=$1", id); err != nil {
+		return artifact, mapNotFound(err)
+	}
+	return artifact, nil
+}
+
+func (s *Store) CreateTaskArtifact(ctx context.Context, taskID string, in TaskArtifactInput) (models.TaskArtifact, error) {
+	artifact, err := s.createTaskArtifact(ctx, s.db, taskID, in)
+	if err == nil {
+		s.Notify(ctx, "task_artifact", taskID)
+	}
+	return artifact, err
+}
+
+func (s *Store) UpdateTaskArtifact(ctx context.Context, id string, in TaskArtifactInput) (models.TaskArtifact, error) {
+	artifact, err := s.GetTaskArtifact(ctx, id)
+	if err != nil {
+		return artifact, err
+	}
+	if strings.TrimSpace(in.Kind) != "" {
+		if err := validateTaskArtifactKind(in.Kind); err != nil {
+			return artifact, err
+		}
+		artifact.Kind = strings.TrimSpace(in.Kind)
+	}
+	if strings.TrimSpace(in.Title) != "" {
+		artifact.Title = strings.TrimSpace(in.Title)
+	}
+	if in.Body != nil {
+		artifact.Body = *in.Body
+	}
+	if strings.TrimSpace(in.Format) != "" {
+		if err := validateTaskArtifactFormat(in.Format); err != nil {
+			return artifact, err
+		}
+		artifact.Format = strings.TrimSpace(in.Format)
+	}
+	if len(in.Metadata) > 0 {
+		metadata, err := normalizeMetadata(in.Metadata)
+		if err != nil {
+			return artifact, err
+		}
+		artifact.Metadata = metadata
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE task_artifacts SET kind=$2, title=$3, body=$4, format=$5, metadata=$6, updated_at=now() WHERE id=$1`,
+		id, artifact.Kind, artifact.Title, artifact.Body, artifact.Format, []byte(artifact.Metadata)); err != nil {
+		return artifact, err
+	}
+	s.Notify(ctx, "task_artifact", artifact.TaskID)
+	return s.GetTaskArtifact(ctx, id)
+}
+
+func (s *Store) DeleteTaskArtifact(ctx context.Context, id string) error {
+	artifact, err := s.GetTaskArtifact(ctx, id)
+	if err != nil {
+		return err
+	}
+	if artifact.RunID != nil {
+		return ErrConflict
+	}
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM task_artifacts WHERE id=$1", id); err != nil {
+		return err
+	}
+	s.Notify(ctx, "task_artifact", artifact.TaskID)
+	return nil
+}
+
+type taskArtifactWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	GetContext(context.Context, any, string, ...any) error
+}
+
+func (s *Store) createTaskArtifact(ctx context.Context, q taskArtifactWriter, taskID string, in TaskArtifactInput) (models.TaskArtifact, error) {
+	if _, err := s.GetTask(ctx, taskID); err != nil {
+		return models.TaskArtifact{}, err
+	}
+	kind := strings.TrimSpace(in.Kind)
+	if kind == "" {
+		kind = "other"
+	}
+	if err := validateTaskArtifactKind(kind); err != nil {
+		return models.TaskArtifact{}, err
+	}
+	format := strings.TrimSpace(in.Format)
+	if format == "" {
+		format = "markdown"
+	}
+	if err := validateTaskArtifactFormat(format); err != nil {
+		return models.TaskArtifact{}, err
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return models.TaskArtifact{}, errors.New("artifact title is required")
+	}
+	body := ""
+	if in.Body != nil {
+		body = *in.Body
+	}
+	createdBy := strings.TrimSpace(in.CreatedBy)
+	if createdBy == "" {
+		createdBy = "api"
+	}
+	metadata, err := normalizeMetadata(in.Metadata)
+	if err != nil {
+		return models.TaskArtifact{}, err
+	}
+	id := uuid.NewString()
+	if _, err := q.ExecContext(ctx, `INSERT INTO task_artifacts (id, task_id, kind, title, body, format, metadata, created_by, run_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, taskID, kind, title, body, format, []byte(metadata), createdBy, in.RunID); err != nil {
+		return models.TaskArtifact{}, err
+	}
+	var artifact models.TaskArtifact
+	if err := q.GetContext(ctx, &artifact, "SELECT * FROM task_artifacts WHERE id=$1", id); err != nil {
+		return artifact, err
+	}
+	return artifact, nil
 }
 
 func (s *Store) EnqueueTaskRun(ctx context.Context, taskID string) (models.Run, error) {
@@ -312,34 +447,41 @@ func (s *Store) FinishRun(ctx context.Context, runID, status string, exitCode in
 	return err
 }
 
-func (s *Store) TaskContext(ctx context.Context, run models.Run) (models.Agent, models.Task, *models.Repo, []models.Comment, error) {
+func (s *Store) TaskContext(ctx context.Context, run models.Run) (models.Agent, models.Task, *models.Repo, []models.Comment, []models.TaskArtifact, error) {
 	agent, err := s.GetAgent(ctx, run.AgentID)
 	if err != nil {
-		return models.Agent{}, models.Task{}, nil, nil, err
+		return models.Agent{}, models.Task{}, nil, nil, nil, err
 	}
 	task, err := s.GetTask(ctx, run.TaskID)
 	if err != nil {
-		return agent, models.Task{}, nil, nil, err
+		return agent, models.Task{}, nil, nil, nil, err
 	}
 	var repo *models.Repo
 	if task.RepoID != nil {
 		var r models.Repo
 		if err := s.db.GetContext(ctx, &r, "SELECT * FROM repos WHERE id=$1", *task.RepoID); err != nil {
-			return agent, task, nil, nil, err
+			return agent, task, nil, nil, nil, err
 		}
 		repo = &r
 	}
 	comments, err := s.ListComments(ctx, task.ID)
 	if err != nil {
-		return agent, task, repo, nil, err
+		return agent, task, repo, nil, nil, err
 	}
 	if len(comments) > 10 {
 		comments = comments[len(comments)-10:]
 	}
-	return agent, task, repo, comments, nil
+	artifacts, err := s.ListTaskArtifacts(ctx, task.ID)
+	if err != nil {
+		return agent, task, repo, comments, nil, err
+	}
+	if len(artifacts) > 10 {
+		artifacts = artifacts[:10]
+	}
+	return agent, task, repo, comments, artifacts, nil
 }
 
-func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models.Task, agent models.Agent, response AgentResponse) error {
+func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models.Task, agent models.Agent, response AgentResponse, runID *string) error {
 	update := response.TaskUpdates
 	status := update.Status
 	if update.RequestHumanReview {
@@ -390,6 +532,18 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 			if _, err := tx.ExecContext(ctx, "INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,'system',$3)", uuid.NewString(), id, subtask.InitialComment); err != nil {
 				return err
 			}
+		}
+	}
+	for _, attachment := range update.Attachments {
+		input, ok, err := attachmentArtifactInput(attachment, agent.ID, runID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		if _, err := s.createTaskArtifact(ctx, tx, task.ID, input); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -496,9 +650,112 @@ type Subtask struct {
 }
 
 type Attachment struct {
-	Kind string `json:"kind"`
-	Path string `json:"path"`
-	Note string `json:"note"`
+	Kind     string          `json:"kind"`
+	Title    string          `json:"title"`
+	Body     string          `json:"body"`
+	Format   string          `json:"format"`
+	Path     string          `json:"path"`
+	Note     string          `json:"note"`
+	Metadata json.RawMessage `json:"metadata"`
+}
+
+func attachmentArtifactInput(attachment Attachment, agentID string, runID *string) (TaskArtifactInput, bool, error) {
+	if strings.TrimSpace(attachment.Kind) == "" && strings.TrimSpace(attachment.Title) == "" && strings.TrimSpace(attachment.Path) == "" && strings.TrimSpace(attachment.Body) == "" {
+		return TaskArtifactInput{}, false, nil
+	}
+	kind := normalizeAttachmentKind(attachment.Kind)
+	title := strings.TrimSpace(attachment.Title)
+	if title == "" {
+		title = strings.TrimSpace(attachment.Note)
+	}
+	if title == "" {
+		title = strings.TrimSpace(attachment.Path)
+	}
+	if title == "" {
+		title = kind
+	}
+	metadata, err := mergeAttachmentMetadata(attachment)
+	if err != nil {
+		return TaskArtifactInput{}, false, err
+	}
+	body := attachment.Body
+	return TaskArtifactInput{
+		Kind:      kind,
+		Title:     title,
+		Body:      &body,
+		Format:    attachment.Format,
+		Metadata:  metadata,
+		CreatedBy: "agent:" + agentID,
+		RunID:     runID,
+	}, true, nil
+}
+
+func normalizeAttachmentKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "pm_document", "pm_handoff", "em_document", "em_handoff", "qa_report", "implementation_note", "run_log", "other":
+		return strings.TrimSpace(kind)
+	case "log":
+		return "run_log"
+	case "file":
+		return "implementation_note"
+	default:
+		return "other"
+	}
+}
+
+func mergeAttachmentMetadata(attachment Attachment) (json.RawMessage, error) {
+	var metadata map[string]any
+	if len(attachment.Metadata) > 0 {
+		if err := json.Unmarshal(attachment.Metadata, &metadata); err != nil {
+			return nil, errors.New("invalid artifact metadata")
+		}
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if strings.TrimSpace(attachment.Path) != "" {
+		metadata["path"] = strings.TrimSpace(attachment.Path)
+	}
+	if strings.TrimSpace(attachment.Note) != "" {
+		metadata["note"] = strings.TrimSpace(attachment.Note)
+	}
+	body, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(body), nil
+}
+
+func validateTaskArtifactKind(kind string) error {
+	switch strings.TrimSpace(kind) {
+	case "pm_document", "pm_handoff", "em_document", "em_handoff", "qa_report", "implementation_note", "run_log", "other":
+		return nil
+	default:
+		return errors.New("invalid task artifact kind")
+	}
+}
+
+func validateTaskArtifactFormat(format string) error {
+	switch strings.TrimSpace(format) {
+	case "markdown", "text", "json":
+		return nil
+	default:
+		return errors.New("invalid task artifact format")
+	}
+}
+
+func normalizeMetadata(metadata json.RawMessage) (json.RawMessage, error) {
+	if len(metadata) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	var value any
+	if err := json.Unmarshal(metadata, &value); err != nil {
+		return nil, errors.New("invalid artifact metadata")
+	}
+	if _, ok := value.(map[string]any); !ok {
+		return nil, errors.New("artifact metadata must be an object")
+	}
+	return metadata, nil
 }
 
 func validateTaskStatus(status string) error {
