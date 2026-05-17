@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/repoconfig"
 )
 
 func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment) string {
@@ -18,6 +19,10 @@ func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, commen
 	if task.ParentID != nil {
 		fmt.Fprintf(&b, "Parent: %s\n", *task.ParentID)
 	}
+	if len(task.Tags) > 0 {
+		fmt.Fprintf(&b, "Tags: %s\n", strings.Join([]string(task.Tags), ", "))
+	}
+	writeLifecycleSection(&b, task, agent.ID)
 	if repo != nil {
 		fmt.Fprintf(&b, "\n=== WORKING REPO ===\n%s\nDefault branch: %s\n", repo.LocalPath, repo.DefaultBranch)
 	}
@@ -49,6 +54,33 @@ Respond ONLY with a single JSON object matching this schema. No markdown, prose,
       {"kind": "file|log", "path": "relative/path/in/worktree", "note": "string"}
     ]
   }
-}`)
+}
+
+Routing notes:
+- If you set "reassign_to", that explicit choice overrides the lifecycle.
+- If you omit "reassign_to" and set status to "done", the task auto-advances to
+  the next non-skipped step shown under "PLANNED REMAINING STEPS" below.
+- Use "request_human_review" when you need a human to inspect before advancing.`)
 	return b.String()
+}
+
+func writeLifecycleSection(b *strings.Builder, task models.Task, currentAgent string) {
+	cfg, err := repoconfig.Load()
+	if err != nil {
+		return
+	}
+	lifecycleID := task.LifecycleID
+	if lifecycleID == "" {
+		lifecycleID = repoconfig.DefaultLifecycleID
+	}
+	remaining := cfg.RemainingSteps(lifecycleID, currentAgent, []string(task.Tags))
+	fmt.Fprintf(b, "\n=== LIFECYCLE ===\nID: %s\nCurrent agent: %s\n", lifecycleID, currentAgent)
+	if len(remaining) == 0 {
+		b.WriteString("Planned remaining steps: (none — this is the final step)\n")
+		return
+	}
+	b.WriteString("Planned remaining steps (after you finish):\n")
+	for i, step := range remaining {
+		fmt.Fprintf(b, "  %d. %s\n", i+1, step.Agent)
+	}
 }

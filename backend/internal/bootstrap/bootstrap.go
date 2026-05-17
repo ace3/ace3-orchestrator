@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,15 +12,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gopkg.in/yaml.v3"
 
 	"mini-paperclip/backend/internal/agentdefs"
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/repoconfig"
 	"mini-paperclip/backend/internal/store"
 )
-
-//go:embed seeds.yaml
-var seedFile embed.FS
 
 type Service struct {
 	store          *store.Store
@@ -47,23 +43,15 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 	if err != nil {
 		return status, err
 	}
-	seeds, err := loadSeeds()
+	cfg, err := repoconfig.Load()
 	if err != nil {
 		return status, err
 	}
-	for _, source := range seeds.SkillSources {
-		if source.ID == "" {
-			source.ID = uuid.NewString()
-		}
-		if err := s.store.UpsertSkillSource(ctx, models.SkillSource{
-			ID:          source.ID,
-			Name:        source.Name,
-			UpstreamURL: source.UpstreamURL,
-			PinnedSHA:   source.PinnedSHA,
-			Kind:        source.Kind,
-		}); err != nil {
-			return status, err
-		}
+	if err := s.upsertSkillSourcesFromConfig(ctx, cfg); err != nil {
+		return status, err
+	}
+	if err := s.upsertSkillsFromConfig(ctx, cfg); err != nil {
+		return status, err
 	}
 	sources, err := s.store.ListSkillSources(ctx)
 	if err != nil {
@@ -71,7 +59,7 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 	}
 	for _, source := range sources {
 		if err := s.SyncSource(ctx, source.ID); err != nil {
-			return status, err
+			slog.Warn("skill source sync failed; continuing with JSON catalog", "source", source.Name, "error", err)
 		}
 	}
 	skillsByName, err := s.skillsByName(ctx)
@@ -82,6 +70,85 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 		return status, err
 	}
 	return s.Status(ctx)
+}
+
+func (s *Service) upsertSkillSourcesFromConfig(ctx context.Context, cfg *repoconfig.Config) error {
+	existing, err := s.store.ListSkillSources(ctx)
+	if err != nil {
+		return err
+	}
+	byName := make(map[string]models.SkillSource, len(existing))
+	for _, src := range existing {
+		byName[src.Name] = src
+	}
+	for _, src := range cfg.SkillSources {
+		id := byName[src.Name].ID
+		if id == "" {
+			id = uuid.NewString()
+		}
+		if err := s.store.UpsertSkillSource(ctx, models.SkillSource{
+			ID:          id,
+			Name:        src.Name,
+			UpstreamURL: src.UpstreamURL,
+			PinnedSHA:   src.PinnedSHA,
+			Kind:        src.Kind,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) upsertSkillsFromConfig(ctx context.Context, cfg *repoconfig.Config) error {
+	sources, err := s.store.ListSkillSources(ctx)
+	if err != nil {
+		return err
+	}
+	sourceIDByName := make(map[string]string, len(sources))
+	for _, src := range sources {
+		sourceIDByName[src.Name] = src.ID
+	}
+	existing, err := s.allSkillsByName(ctx)
+	if err != nil {
+		return err
+	}
+	bySource := make(map[string][]models.Skill)
+	for _, sk := range cfg.Skills {
+		sourceID := sourceIDByName[sk.Source]
+		if sourceID == "" {
+			return fmt.Errorf("skills.json: skill %q references source %q which is not loaded", sk.Name, sk.Source)
+		}
+		id := existing[sk.Name].ID
+		if id == "" {
+			id = uuid.NewString()
+		}
+		bySource[sourceID] = append(bySource[sourceID], models.Skill{
+			ID:           id,
+			SourceID:     sourceID,
+			Name:         sk.Name,
+			PathInSource: sk.PathInSource,
+			Version:      sk.Version,
+			Archived:     sk.Archived,
+		})
+	}
+	for sourceID, skills := range bySource {
+		if err := s.store.UpsertSkillsForSource(ctx, sourceID, skills); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) allSkillsByName(ctx context.Context) (map[string]models.Skill, error) {
+	var skills []models.Skill
+	if err := s.store.DB().SelectContext(ctx, &skills, "SELECT * FROM skills"); err != nil {
+		return nil, err
+	}
+	out := make(map[string]models.Skill, len(skills))
+	for _, sk := range skills {
+		out[sk.Name] = sk
+	}
+	return out, nil
 }
 
 func (s *Service) SyncAgentDefinitions(ctx context.Context, skillsByName map[string]models.Skill) error {
@@ -270,29 +337,3 @@ func (s *Service) skillsByName(ctx context.Context) (map[string]models.Skill, er
 	return out, nil
 }
 
-type seedConfig struct {
-	SkillSources []seedSource `yaml:"skill_sources"`
-}
-
-type seedSource struct {
-	ID          string `yaml:"id"`
-	Name        string `yaml:"name"`
-	UpstreamURL string `yaml:"upstream_url"`
-	PinnedSHA   string `yaml:"pinned_sha"`
-	Kind        string `yaml:"kind"`
-}
-
-func loadSeeds() (seedConfig, error) {
-	var cfg seedConfig
-	body, err := seedFile.ReadFile("seeds.yaml")
-	if err != nil {
-		return cfg, err
-	}
-	if err := yaml.Unmarshal(body, &cfg); err != nil {
-		return cfg, err
-	}
-	for i := range cfg.SkillSources {
-		cfg.SkillSources[i].Name = strings.TrimSpace(cfg.SkillSources[i].Name)
-	}
-	return cfg, nil
-}

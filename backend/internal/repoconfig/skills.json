@@ -1,0 +1,33 @@
+{
+  "sources": [
+    {
+      "name": "verzth",
+      "upstream_url": "https://github.com/verzth/skills",
+      "pinned_sha": "main",
+      "kind": "verzth"
+    },
+    {
+      "name": "ace3",
+      "upstream_url": "https://github.com/ace3/skills",
+      "pinned_sha": "main",
+      "kind": "ace3"
+    }
+  ],
+  "skills": [
+    { "name": "product-manager",    "source": "ace3", "path_in_source": "skills/product-manager/SKILL.md",    "version": "" },
+    { "name": "prd",                "source": "ace3", "path_in_source": "skills/prd/SKILL.md",                "version": "" },
+    { "name": "research",           "source": "ace3", "path_in_source": "skills/research/SKILL.md",           "version": "" },
+    { "name": "engineering-manager","source": "ace3", "path_in_source": "skills/engineering-manager/SKILL.md","version": "" },
+    { "name": "autoplan",           "source": "ace3", "path_in_source": "skills/autoplan/SKILL.md",           "version": "" },
+    { "name": "plan-eng-review",    "source": "ace3", "path_in_source": "skills/plan-eng-review/SKILL.md",    "version": "" },
+    { "name": "backend-developer",  "source": "ace3", "path_in_source": "skills/backend-developer/SKILL.md",  "version": "" },
+    { "name": "golang-engineer",    "source": "ace3", "path_in_source": "skills/golang-engineer/SKILL.md",    "version": "" },
+    { "name": "nobi-golang-pattern","source": "ace3", "path_in_source": "skills/nobi-golang-pattern/SKILL.md","version": "" },
+    { "name": "frontend-developer", "source": "ace3", "path_in_source": "skills/frontend-developer/SKILL.md", "version": "" },
+    { "name": "frontend-design",    "source": "ace3", "path_in_source": "skills/frontend-design/SKILL.md",    "version": "" },
+    { "name": "design-html",        "source": "ace3", "path_in_source": "skills/design-html/SKILL.md",        "version": "" },
+    { "name": "qa-manager",         "source": "ace3", "path_in_source": "skills/qa-manager/SKILL.md",         "version": "" },
+    { "name": "qa-engineer",        "source": "ace3", "path_in_source": "skills/qa-engineer/SKILL.md",        "version": "" },
+    { "name": "qa-tester",          "source": "ace3", "path_in_source": "skills/qa-tester/SKILL.md",          "version": "" }
+  ]
+}

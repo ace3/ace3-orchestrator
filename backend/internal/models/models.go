@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/lib/pq"
+)
 
 type Agent struct {
 	ID             string    `db:"id" json:"id"`
@@ -62,18 +66,20 @@ type Repo struct {
 }
 
 type Task struct {
-	ID              string    `db:"id" json:"id"`
-	ProjectID       string    `db:"project_id" json:"project_id"`
-	RepoID          *string   `db:"repo_id" json:"repo_id"`
-	Title           string    `db:"title" json:"title"`
-	Description     string    `db:"description" json:"description"`
-	Status          string    `db:"status" json:"status"`
-	AssigneeAgentID *string   `db:"assignee_agent_id" json:"assignee_agent_id"`
-	ParentID        *string   `db:"parent_id" json:"parent_id"`
-	Priority        int       `db:"priority" json:"priority"`
-	RetryCount      int       `db:"retry_count" json:"retry_count"`
-	CreatedAt       time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt       time.Time `db:"updated_at" json:"updated_at"`
+	ID              string         `db:"id" json:"id"`
+	ProjectID       string         `db:"project_id" json:"project_id"`
+	RepoID          *string        `db:"repo_id" json:"repo_id"`
+	Title           string         `db:"title" json:"title"`
+	Description     string         `db:"description" json:"description"`
+	Status          string         `db:"status" json:"status"`
+	AssigneeAgentID *string        `db:"assignee_agent_id" json:"assignee_agent_id"`
+	ParentID        *string        `db:"parent_id" json:"parent_id"`
+	Priority        int            `db:"priority" json:"priority"`
+	RetryCount      int            `db:"retry_count" json:"retry_count"`
+	Tags            pq.StringArray `db:"tags" json:"tags"`
+	LifecycleID     string         `db:"lifecycle_id" json:"lifecycle_id"`
+	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
 }
 
 type Comment struct {

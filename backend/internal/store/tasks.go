@@ -12,18 +12,22 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/repoconfig"
 )
 
 type TaskInput struct {
-	RepoID          *string `json:"repo_id"`
-	Title           string  `json:"title"`
-	Description     string  `json:"description"`
-	Status          string  `json:"status"`
-	AssigneeAgentID *string `json:"assignee_agent_id"`
-	ParentID        *string `json:"parent_id"`
-	Priority        int     `json:"priority"`
+	RepoID          *string   `json:"repo_id"`
+	Title           string    `json:"title"`
+	Description     string    `json:"description"`
+	Status          string    `json:"status"`
+	AssigneeAgentID *string   `json:"assignee_agent_id"`
+	ParentID        *string   `json:"parent_id"`
+	Priority        int       `json:"priority"`
+	Tags            *[]string `json:"tags,omitempty"`
+	LifecycleID     *string   `json:"lifecycle_id,omitempty"`
 }
 
 const maxTaskRetries = 3
@@ -68,8 +72,16 @@ func (s *Store) CreateTask(ctx context.Context, projectID string, in TaskInput) 
 		return models.Task{}, err
 	}
 	id := uuid.NewString()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, projectID, in.RepoID, strings.TrimSpace(in.Title), in.Description, status, assignee, in.ParentID, in.Priority); err != nil {
+	tags := pq.StringArray{}
+	if in.Tags != nil {
+		tags = pq.StringArray(*in.Tags)
+	}
+	lifecycleID := "default"
+	if in.LifecycleID != nil && strings.TrimSpace(*in.LifecycleID) != "" {
+		lifecycleID = strings.TrimSpace(*in.LifecycleID)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority, tags, lifecycle_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, projectID, in.RepoID, strings.TrimSpace(in.Title), in.Description, status, assignee, in.ParentID, in.Priority, tags, lifecycleID); err != nil {
 		return models.Task{}, err
 	}
 	s.Notify(ctx, "task", id)
@@ -105,8 +117,14 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in TaskInput) (models
 		task.ParentID = in.ParentID
 	}
 	task.Priority = in.Priority
-	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET repo_id=$2, title=$3, description=$4, status=$5, assignee_agent_id=$6, parent_id=$7, priority=$8, updated_at=now() WHERE id=$1`,
-		id, task.RepoID, task.Title, task.Description, task.Status, task.AssigneeAgentID, task.ParentID, task.Priority); err != nil {
+	if in.Tags != nil {
+		task.Tags = pq.StringArray(*in.Tags)
+	}
+	if in.LifecycleID != nil && strings.TrimSpace(*in.LifecycleID) != "" {
+		task.LifecycleID = strings.TrimSpace(*in.LifecycleID)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET repo_id=$2, title=$3, description=$4, status=$5, assignee_agent_id=$6, parent_id=$7, priority=$8, tags=$9, lifecycle_id=$10, updated_at=now() WHERE id=$1`,
+		id, task.RepoID, task.Title, task.Description, task.Status, task.AssigneeAgentID, task.ParentID, task.Priority, task.Tags, task.LifecycleID); err != nil {
 		return task, err
 	}
 	s.Notify(ctx, "task", id)
@@ -341,6 +359,15 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 			return err
 		}
 		assignee = resolved
+	} else if !update.RequestHumanReview && status == "done" {
+		next, err := advanceLifecycleTx(ctx, tx, task)
+		if err != nil {
+			return err
+		}
+		if next != nil {
+			assignee = next
+			status = "todo"
+		}
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, updated_at=now() WHERE id=$1", task.ID, status, assignee); err != nil {
 		return err
@@ -355,8 +382,8 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 			}
 			subtaskAssignee = resolved
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority)
-			VALUES ($1,$2,$3,$4,$5,'todo',$6,$7,$8)`, id, task.ProjectID, task.RepoID, subtask.Title, subtask.Description, subtaskAssignee, task.ID, task.Priority); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority, tags, lifecycle_id)
+			VALUES ($1,$2,$3,$4,$5,'todo',$6,$7,$8,$9,$10)`, id, task.ProjectID, task.RepoID, subtask.Title, subtask.Description, subtaskAssignee, task.ID, task.Priority, task.Tags, task.LifecycleID); err != nil {
 			return err
 		}
 		if subtask.InitialComment != "" {
@@ -366,6 +393,35 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		}
 	}
 	return nil
+}
+
+// advanceLifecycleTx returns the agents.id of the next lifecycle step for task,
+// or nil if the lifecycle is exhausted. Uses the task's current assignee as the
+// "where we are now" cursor; lifecycle steps are skipped per the task's tags.
+// Returns (nil, nil) if no further step applies — caller leaves the task done.
+func advanceLifecycleTx(ctx context.Context, tx *sqlx.Tx, task models.Task) (*string, error) {
+	cfg, err := repoconfig.Load()
+	if err != nil {
+		return nil, err
+	}
+	current := ""
+	if task.AssigneeAgentID != nil {
+		// AssigneeAgentID is the agents.id which equals the repoconfig agent id
+		// (SyncRepoAgent preserves it), so it's safe to use directly.
+		current = *task.AssigneeAgentID
+	}
+	nextID, done, err := cfg.NextAgent(task.LifecycleID, current, []string(task.Tags))
+	if err != nil {
+		return nil, err
+	}
+	if done {
+		return nil, nil
+	}
+	resolved, err := resolveAgentRefTx(ctx, tx, &nextID)
+	if err != nil {
+		return nil, err
+	}
+	return resolved, nil
 }
 
 func (s *Store) resolveAgentRef(ctx context.Context, value *string) (*string, error) {

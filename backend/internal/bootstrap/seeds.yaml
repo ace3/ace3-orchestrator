@@ -1,9 +1,0 @@
-skill_sources:
-  - name: verzth
-    upstream_url: https://github.com/verzth/skills
-    pinned_sha: main
-    kind: verzth
-  - name: ace3
-    upstream_url: https://github.com/ace3/skills
-    pinned_sha: main
-    kind: ace3

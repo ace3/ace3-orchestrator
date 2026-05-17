@@ -1,74 +1,21 @@
+// Package agentdefs is a thin shim over repoconfig that preserves the legacy
+// surface used by bootstrap and the orchestrator. New code should import
+// repoconfig directly. This package will be removed once all callers migrate.
 package agentdefs
 
 import (
-	"crypto/sha256"
-	"embed"
-	"encoding/hex"
-	"errors"
 	"fmt"
-	"strings"
-
-	"gopkg.in/yaml.v3"
 
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/repoconfig"
 )
 
-//go:embed agents.yaml
-var definitionsFile embed.FS
-
-type Definition struct {
-	ID         string   `yaml:"id"`
-	Name       string   `yaml:"name"`
-	Role       string   `yaml:"role"`
-	CLIKind    string   `yaml:"cli_kind"`
-	BasePrompt string   `yaml:"base_prompt"`
-	Skills     []string `yaml:"skills"`
-}
-
-type fileConfig struct {
-	Agents []Definition `yaml:"agents"`
-}
+type Definition = repoconfig.Agent
 
 func Load() ([]Definition, error) {
-	body, err := definitionsFile.ReadFile("agents.yaml")
+	cfg, err := repoconfig.Load()
 	if err != nil {
 		return nil, err
-	}
-	return Parse(body)
-}
-
-func Parse(body []byte) ([]Definition, error) {
-	var cfg fileConfig
-	if err := yaml.Unmarshal(body, &cfg); err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	for i := range cfg.Agents {
-		def := &cfg.Agents[i]
-		def.ID = strings.TrimSpace(def.ID)
-		def.Name = strings.TrimSpace(def.Name)
-		def.Role = strings.TrimSpace(def.Role)
-		def.CLIKind = strings.TrimSpace(def.CLIKind)
-		def.BasePrompt = strings.TrimSpace(def.BasePrompt)
-		if def.ID == "" || def.Name == "" || def.Role == "" || def.BasePrompt == "" {
-			return nil, fmt.Errorf("agent definition %d is missing id, name, role, or base_prompt", i)
-		}
-		if def.CLIKind != "claude" && def.CLIKind != "codex" {
-			return nil, fmt.Errorf("agent definition %q has invalid cli_kind %q", def.ID, def.CLIKind)
-		}
-		if seen[def.ID] {
-			return nil, fmt.Errorf("duplicate agent definition id %q", def.ID)
-		}
-		seen[def.ID] = true
-		for j := range def.Skills {
-			def.Skills[j] = strings.TrimSpace(def.Skills[j])
-			if def.Skills[j] == "" {
-				return nil, fmt.Errorf("agent definition %q has an empty skill name", def.ID)
-			}
-		}
-	}
-	if len(cfg.Agents) == 0 {
-		return nil, errors.New("agent definitions file has no agents")
 	}
 	return cfg.Agents, nil
 }
@@ -82,11 +29,11 @@ func ByID(defs []Definition) map[string]Definition {
 }
 
 func Find(id string) (Definition, error) {
-	defs, err := Load()
+	cfg, err := repoconfig.Load()
 	if err != nil {
 		return Definition{}, err
 	}
-	def, ok := ByID(defs)[id]
+	def, ok := cfg.AgentByID(id)
 	if !ok {
 		return Definition{}, fmt.Errorf("agent %q is not repo-defined", id)
 	}
@@ -94,9 +41,7 @@ func Find(id string) (Definition, error) {
 }
 
 func Hash(def Definition) string {
-	body, _ := yaml.Marshal(def)
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:])
+	return repoconfig.AgentHash(def)
 }
 
 func Apply(agent models.Agent, def Definition, skills []models.Skill) models.Agent {

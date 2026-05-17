@@ -1,0 +1,35 @@
+{
+  "lifecycles": [
+    {
+      "id": "default",
+      "description": "Standard feature delivery: PM -> EM -> Backend -> Frontend -> QA",
+      "steps": [
+        { "agent": "pm",       "skip_when": ["skip-product"] },
+        { "agent": "em",       "skip_when": ["skip-planning"] },
+        { "agent": "backend",  "skip_when": ["frontend-only", "no-backend"] },
+        { "agent": "frontend", "skip_when": ["backend-only", "no-frontend"] },
+        { "agent": "qa",       "skip_when": ["skip-qa"] }
+      ]
+    },
+    {
+      "id": "backend-only",
+      "description": "Backend feature delivery: PM -> EM -> Backend -> QA",
+      "steps": [
+        { "agent": "pm",      "skip_when": ["skip-product"] },
+        { "agent": "em",      "skip_when": ["skip-planning"] },
+        { "agent": "backend", "skip_when": [] },
+        { "agent": "qa",      "skip_when": ["skip-qa"] }
+      ]
+    },
+    {
+      "id": "frontend-only",
+      "description": "Frontend feature delivery: PM -> EM -> Frontend -> QA",
+      "steps": [
+        { "agent": "pm",       "skip_when": ["skip-product"] },
+        { "agent": "em",       "skip_when": ["skip-planning"] },
+        { "agent": "frontend", "skip_when": [] },
+        { "agent": "qa",       "skip_when": ["skip-qa"] }
+      ]
+    }
+  ]
+}

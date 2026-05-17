@@ -1,70 +1,43 @@
 package agentdefs
 
 import (
-	"strings"
 	"testing"
 )
 
-func TestParseValidDefinitions(t *testing.T) {
-	defs, err := Parse([]byte(`
-agents:
-  - id: qa
-    name: QA Agent
-    role: qa
-    cli_kind: codex
-    base_prompt: Verify behavior.
-    skills: [qa-tester]
-`))
+func TestLoadReturnsRepoAgents(t *testing.T) {
+	defs, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defs) != 1 || defs[0].ID != "qa" || defs[0].BasePrompt != "Verify behavior." {
-		t.Fatalf("unexpected definitions: %+v", defs)
+	if len(defs) == 0 {
+		t.Fatal("expected at least one agent definition")
 	}
 }
 
-func TestParseRejectsDuplicateIDs(t *testing.T) {
-	_, err := Parse([]byte(`
-agents:
-  - id: qa
-    name: QA Agent
-    role: qa
-    cli_kind: codex
-    base_prompt: Verify behavior.
-  - id: qa
-    name: QA Copy
-    role: qa
-    cli_kind: codex
-    base_prompt: Verify behavior again.
-`))
-	if err == nil || !strings.Contains(err.Error(), `duplicate agent definition id "qa"`) {
-		t.Fatalf("unexpected error: %v", err)
+func TestFindByID(t *testing.T) {
+	def, err := Find("qa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.ID != "qa" || def.BasePrompt == "" {
+		t.Fatalf("unexpected definition: %+v", def)
 	}
 }
 
-func TestParseRejectsMissingRequiredFields(t *testing.T) {
-	_, err := Parse([]byte(`
-agents:
-  - id: qa
-    name: QA Agent
-    role: qa
-    cli_kind: codex
-`))
-	if err == nil || !strings.Contains(err.Error(), "missing id, name, role, or base_prompt") {
-		t.Fatalf("unexpected error: %v", err)
+func TestFindUnknownAgent(t *testing.T) {
+	if _, err := Find("does-not-exist"); err == nil {
+		t.Fatal("expected error for unknown agent")
 	}
 }
 
-func TestParseRejectsInvalidCLIKind(t *testing.T) {
-	_, err := Parse([]byte(`
-agents:
-  - id: qa
-    name: QA Agent
-    role: qa
-    cli_kind: other
-    base_prompt: Verify behavior.
-`))
-	if err == nil || !strings.Contains(err.Error(), `invalid cli_kind "other"`) {
-		t.Fatalf("unexpected error: %v", err)
+func TestHashIsStable(t *testing.T) {
+	def, err := Find("pm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Hash(def)
+	b := Hash(def)
+	if a != b {
+		t.Fatal("hash must be deterministic")
 	}
 }

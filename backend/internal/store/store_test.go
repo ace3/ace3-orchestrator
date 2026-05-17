@@ -60,10 +60,10 @@ func TestCreateTaskCanonicalizesRoleAssignee(t *testing.T) {
 		WithArgs("backend").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(backendID))
 
-	insertQuery := `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`
+	insertQuery := `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority, tags, lifecycle_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
 	mock.ExpectExec(regexp.QuoteMeta(insertQuery)).
-		WithArgs(sqlmock.AnyArg(), "project-1", nil, "Do work", "details", "todo", &backendID, nil, 3).
+		WithArgs(sqlmock.AnyArg(), "project-1", nil, "Do work", "details", "todo", &backendID, nil, 3, sqlmock.AnyArg(), "default").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
 		WithArgs(sqlmock.AnyArg()).
@@ -100,10 +100,10 @@ func TestCreateTaskTreatsStringNullAssigneeAsUnassigned(t *testing.T) {
 	defer rawDB.Close()
 
 	now := time.Now()
-	insertQuery := `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`
+	insertQuery := `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority, tags, lifecycle_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
 	mock.ExpectExec(regexp.QuoteMeta(insertQuery)).
-		WithArgs(sqlmock.AnyArg(), "project-1", nil, "Do work", "", "todo", nil, nil, 0).
+		WithArgs(sqlmock.AnyArg(), "project-1", nil, "Do work", "", "todo", nil, nil, 0, sqlmock.AnyArg(), "default").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
 		WithArgs(sqlmock.AnyArg()).
