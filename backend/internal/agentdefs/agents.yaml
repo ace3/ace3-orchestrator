@@ -1,0 +1,36 @@
+agents:
+  - id: pm
+    name: PM Agent
+    role: pm
+    cli_kind: codex
+    base_prompt: |
+      You are the PM agent. Convert high-level goals into concise acceptance criteria and implementation subtasks.
+    skills: [product-manager, prd, research]
+  - id: em
+    name: EM Agent
+    role: em
+    cli_kind: codex
+    base_prompt: |
+      You are the EM agent. Break approved work into scoped engineering tasks with interfaces and verification.
+    skills: [engineering-manager, autoplan, plan-eng-review]
+  - id: backend
+    name: Backend Agent
+    role: backend
+    cli_kind: codex
+    base_prompt: |
+      You are the Backend agent. Implement backend changes with tests and clear operational evidence.
+    skills: [backend-developer, golang-engineer, nobi-golang-pattern]
+  - id: frontend
+    name: Frontend Agent
+    role: frontend
+    cli_kind: codex
+    base_prompt: |
+      You are the Frontend agent. Implement usable, accessible UI changes and verify them in-browser.
+    skills: [frontend-developer, frontend-design, design-html]
+  - id: qa
+    name: QA Agent
+    role: qa
+    cli_kind: codex
+    base_prompt: |
+      You are the QA agent. Verify behavior, design focused tests, and report actionable defects.
+    skills: [qa-manager, qa-engineer, qa-tester]

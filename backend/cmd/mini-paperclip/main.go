@@ -32,6 +32,17 @@ func main() {
 	bs := bootstrap.New(st, cfg.SkillsCacheDir)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	status, err := bs.Status(ctx)
+	if err != nil {
+		slog.Error("bootstrap status failed", "error", err)
+		os.Exit(1)
+	}
+	if status.Bootstrapped {
+		if err := bs.SyncAgentDefinitions(ctx, nil); err != nil {
+			slog.Error("sync repo-defined agents failed", "error", err)
+			os.Exit(1)
+		}
+	}
 	orch := orchestrator.New(cfg, st)
 	bs.StartUpdatePoller(ctx)
 	orch.Start(ctx)

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"mini-paperclip/backend/internal/agentdefs"
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/store"
@@ -116,6 +117,19 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		o.failRun(ctx, run, "", fmt.Errorf("runner %q is not available", run.CLIKind))
 		return
 	}
+	def, err := agentdefs.Find(agent.ID)
+	if err != nil {
+		o.failRun(ctx, run, "", err)
+		return
+	}
+	defSkills, err := o.store.SkillsByName(ctx, def.Skills)
+	if err != nil {
+		o.failRun(ctx, run, "", err)
+		return
+	}
+	agent = agentdefs.Apply(agent, def, defSkills)
+	defHash := agentdefs.Hash(def)
+	o.store.AppendRunEvent(ctx, run.ID, "info", "agent definition hash: "+defHash)
 	worktree, cleanup, err := o.prepareWorktree(ctx, run.ID, repo)
 	if err != nil {
 		o.failRun(ctx, run, "", fmt.Errorf("prepare worktree: %w", err))
@@ -130,7 +144,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 	prompt := BuildPrompt(agent, task, repo, comments)
 	result, err := runner.Run(ctx, RunRequest{
 		Prompt:       prompt,
-		SystemPrompt: agent.RolePrompt,
+		SystemPrompt: def.BasePrompt,
 		WorktreePath: worktree,
 		Profile:      deref(agent.CLIProfile),
 		Timeout:      o.cfg.CLITimeout,
@@ -140,26 +154,26 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		},
 	})
 	if err != nil {
-		o.failRun(ctx, run, prompt, err)
+		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
 		return
 	}
 	shouldCleanup = !result.Parsed.TaskUpdates.KeepWorktree
 	tx, err := o.store.DB().BeginTxx(ctx, nil)
 	if err != nil {
-		o.failRun(ctx, run, prompt, err)
+		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
 		return
 	}
 	if err := o.store.ApplyAgentResponse(ctx, tx, task, agent, result.Parsed); err != nil {
 		_ = tx.Rollback()
-		o.failRun(ctx, run, prompt, err)
+		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		o.failRun(ctx, run, prompt, err)
+		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
 		return
 	}
 	o.store.Notify(ctx, "task", task.ID)
-	_ = o.store.FinishRun(ctx, run.ID, "done", result.ExitCode, result.TokensIn, result.TokensOut, result.CostUSD, prompt, worktree)
+	_ = o.store.FinishRun(ctx, run.ID, "done", result.ExitCode, result.TokensIn, result.TokensOut, result.CostUSD, hashablePrompt(def.BasePrompt, prompt), worktree)
 }
 
 func (o *Orchestrator) failRun(ctx context.Context, run models.Run, prompt string, err error) {
@@ -167,6 +181,10 @@ func (o *Orchestrator) failRun(ctx context.Context, run models.Run, prompt strin
 	_, _ = o.store.DB().ExecContext(ctx, `UPDATE tasks SET status='blocked', retry_count=retry_count+1, updated_at=now() WHERE id=$1`, run.TaskID)
 	_, _ = o.store.AddComment(ctx, run.TaskID, "system", "Run failed: "+err.Error())
 	_ = o.store.FinishRun(ctx, run.ID, "error", 1, 0, 0, 0, prompt, "")
+}
+
+func hashablePrompt(systemPrompt, taskPrompt string) string {
+	return "System instructions:\n" + systemPrompt + "\n\nTask prompt:\n" + taskPrompt
 }
 
 func (o *Orchestrator) prepareWorktree(ctx context.Context, runID string, repo *models.Repo) (string, func(), error) {

@@ -3,16 +3,18 @@ package models
 import "time"
 
 type Agent struct {
-	ID         string    `db:"id" json:"id"`
-	Name       string    `db:"name" json:"name"`
-	Role       string    `db:"role" json:"role"`
-	RolePrompt string    `db:"role_prompt" json:"role_prompt"`
-	CLIKind    string    `db:"cli_kind" json:"cli_kind"`
-	CLIProfile *string   `db:"cli_profile" json:"cli_profile"`
-	Enabled    bool      `db:"enabled" json:"enabled"`
-	Skills     []Skill   `json:"skills,omitempty"`
-	CreatedAt  time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt  time.Time `db:"updated_at" json:"updated_at"`
+	ID             string    `db:"id" json:"id"`
+	Name           string    `db:"name" json:"name"`
+	Role           string    `db:"role" json:"role"`
+	RolePrompt     string    `db:"role_prompt" json:"role_prompt"`
+	BasePrompt     string    `db:"-" json:"base_prompt,omitempty"`
+	DefinitionHash string    `db:"-" json:"definition_hash,omitempty"`
+	CLIKind        string    `db:"cli_kind" json:"cli_kind"`
+	CLIProfile     *string   `db:"cli_profile" json:"cli_profile"`
+	Enabled        bool      `db:"enabled" json:"enabled"`
+	Skills         []Skill   `json:"skills,omitempty"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
 }
 
 type SkillSource struct {
