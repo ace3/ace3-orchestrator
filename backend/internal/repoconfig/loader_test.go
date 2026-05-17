@@ -44,6 +44,45 @@ func TestAgentSkillsResolveToCatalog(t *testing.T) {
 	}
 }
 
+func TestRecommendedSkillNamesMatchesTaskTextTagsAndAgent(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := cfg.RecommendedSkillNames("backend", "Add API endpoint", "Include integration test coverage", "default", []string{"needs-tests"})
+	found := map[string]bool{}
+	for _, name := range names {
+		found[name] = true
+	}
+	if !found["backend-developer"] || !found["qa-engineer"] {
+		t.Fatalf("expected backend-developer and qa-engineer recommendations, got %v", names)
+	}
+	if found["frontend-developer"] {
+		t.Fatalf("unexpected frontend recommendation for backend task: %v", names)
+	}
+}
+
+func TestSkillRecommendationsReferenceKnownAgents(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	agents := map[string]bool{}
+	for _, agent := range cfg.Agents {
+		agents[agent.ID] = true
+	}
+	for _, skill := range cfg.Skills {
+		for _, agentID := range skill.RecommendedAgents {
+			if !agents[agentID] {
+				t.Fatalf("skill %q recommends unknown agent %q", skill.Name, agentID)
+			}
+		}
+		if len(skill.RecommendedAgents) > 0 && len(skill.TriggerKeywords) == 0 && len(skill.TriggerTags) == 0 {
+			t.Fatalf("skill %q has recommendations without triggers", skill.Name)
+		}
+	}
+}
+
 func TestLifecycleStepsReferenceKnownAgents(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {

@@ -11,6 +11,8 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/jmoiron/sqlx"
+
+	"mini-paperclip/backend/internal/models"
 )
 
 func TestListInstalledSkillsExcludesArchivedAndOrdersBySourceName(t *testing.T) {
@@ -263,6 +265,58 @@ func TestUpdateAgentRuntimeDoesNotChangePromptNameRoleOrSkills(t *testing.T) {
 	}
 	if agent.Name != "PM Agent" || agent.Role != "pm" || agent.RolePrompt != "repo prompt" || agent.Enabled {
 		t.Fatalf("unexpected runtime update result: %+v", agent)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyAgentResponseUpdatesTagsLifecycleAndAdvancesWithNewRouting(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	emID := "em"
+	frontendID := "frontend"
+	resolveQuery := `SELECT id FROM agents
+		WHERE id=$1 OR role=$1 OR name=$1
+		ORDER BY CASE WHEN id=$1 THEN 0 WHEN role=$1 THEN 1 ELSE 2 END, id
+		LIMIT 1`
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)")).
+		WithArgs(sqlmock.AnyArg(), "task-1", "agent:em", "route to frontend").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(resolveQuery)).
+		WithArgs("frontend").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(frontendID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, tags=$4, lifecycle_id=$5, updated_at=now() WHERE id=$1")).
+		WithArgs("task-1", "todo", sqlmock.AnyArg(), sqlmock.AnyArg(), "frontend-only").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	tx, err := store.DB().BeginTxx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := []string{"frontend-only", "no-backend"}
+	lifecycleID := "frontend-only"
+	task := models.Task{ID: "task-1", ProjectID: "project-1", AssigneeAgentID: &emID, LifecycleID: "default"}
+	err = store.ApplyAgentResponse(context.Background(), tx, task, models.Agent{ID: "em"}, AgentResponse{
+		TaskUpdates: TaskUpdates{
+			Status:      "done",
+			Comment:     "route to frontend",
+			Tags:        &tags,
+			LifecycleID: &lifecycleID,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

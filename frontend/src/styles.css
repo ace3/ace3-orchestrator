@@ -337,7 +337,7 @@ a:hover { color: var(--accent-hover); }
 /* ---------- Forms ---------- */
 .grid-form, .task-form {
   display: grid;
-  grid-template-columns: 1.5fr 2fr 180px auto auto;
+  grid-template-columns: 1.4fr 1.8fr 160px 140px 180px auto auto;
   gap: 8px;
   margin-bottom: 16px;
   align-items: center;
@@ -464,6 +464,115 @@ td { color: var(--text-muted); }
 td strong, td b { color: var(--text); font-weight: 500; }
 tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--bg-hover); }
+.selected-row { background: var(--bg-active); }
+
+.tag-row {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.tag-row span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-chip);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.browser-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.tree-pane, .preview-pane {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  min-width: 0;
+}
+.tree-dir {
+  display: grid;
+  gap: 4px;
+  margin-left: 10px;
+}
+.tree-dir > span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.tree-file {
+  width: 100%;
+  justify-content: flex-start;
+  background: transparent;
+  color: var(--text-muted);
+  border-color: transparent;
+  padding: 4px 6px;
+}
+.tree-file:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.preview-pane pre {
+  max-height: 520px;
+}
+
+.map-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.map-tree {
+  display: grid;
+  gap: 8px;
+}
+.map-node {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  padding: 10px;
+}
+.map-node.skill {
+  background: var(--bg-input);
+}
+.map-node strong {
+  display: block;
+  color: var(--text);
+  font-weight: 500;
+}
+.map-node p {
+  margin: 8px 0 0;
+}
+.map-children {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+.map-flow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.map-flow span {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-muted);
+}
+.map-flow em {
+  color: var(--text-dim);
+  font-style: normal;
+}
 
 /* ============================================================
    Kanban — Plane-inspired
@@ -994,7 +1103,7 @@ pre {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 820px) {
-  main, .split, .grid-form, .task-form, .confirm-form { grid-template-columns: 1fr; }
+  main, .split, .grid-form, .task-form, .confirm-form, .browser-grid, .map-grid { grid-template-columns: 1fr; }
   .board-filters { display: grid; }
   .board-filters label { min-width: 0; }
   .kanban { grid-auto-columns: 260px; }

@@ -15,6 +15,7 @@ import (
 	"mini-paperclip/backend/internal/agentdefs"
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/repoconfig"
 	"mini-paperclip/backend/internal/store"
 )
 
@@ -131,7 +132,12 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 	agent = agentdefs.Apply(agent, def, defSkills)
 	defHash := agentdefs.Hash(def)
 	o.store.AppendRunEvent(ctx, run.ID, "info", "agent definition hash: "+defHash)
-	skillDocs, warnings, err := o.loadSkillDocs(ctx, agent.Skills)
+	runSkills, err := o.runSkillSelections(ctx, agent, task)
+	if err != nil {
+		o.failRun(ctx, run, "", fmt.Errorf("select skill docs: %w", err))
+		return
+	}
+	skillDocs, warnings, err := o.loadSkillDocs(ctx, runSkills)
 	if err != nil {
 		o.failRun(ctx, run, "", fmt.Errorf("load skill docs: %w", err))
 		return
@@ -196,8 +202,42 @@ func hashablePrompt(systemPrompt, taskPrompt string) string {
 	return "System instructions:\n" + systemPrompt + "\n\nTask prompt:\n" + taskPrompt
 }
 
-func (o *Orchestrator) loadSkillDocs(ctx context.Context, skills []models.Skill) ([]SkillDoc, []string, error) {
-	if len(skills) == 0 {
+type runSkillSelection struct {
+	Skill  models.Skill
+	Reason string
+}
+
+func (o *Orchestrator) runSkillSelections(ctx context.Context, agent models.Agent, task models.Task) ([]runSkillSelection, error) {
+	cfg, err := repoconfig.Load()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(agent.Skills))
+	selections := make([]runSkillSelection, 0, len(agent.Skills))
+	for _, skill := range agent.Skills {
+		seen[skill.Name] = true
+		selections = append(selections, runSkillSelection{Skill: skill, Reason: "assigned"})
+	}
+	recommended := cfg.RecommendedSkillNames(agent.ID, task.Title, task.Description, task.LifecycleID, []string(task.Tags))
+	for _, name := range recommended {
+		if seen[name] {
+			continue
+		}
+		skills, err := o.store.SkillsByName(ctx, []string{name})
+		if err != nil {
+			return nil, err
+		}
+		if len(skills) == 0 {
+			continue
+		}
+		seen[name] = true
+		selections = append(selections, runSkillSelection{Skill: skills[0], Reason: "recommended"})
+	}
+	return selections, nil
+}
+
+func (o *Orchestrator) loadSkillDocs(ctx context.Context, selections []runSkillSelection) ([]SkillDoc, []string, error) {
+	if len(selections) == 0 {
 		return nil, nil, nil
 	}
 	sources, err := o.store.ListSkillSources(ctx)
@@ -208,9 +248,10 @@ func (o *Orchestrator) loadSkillDocs(ctx context.Context, skills []models.Skill)
 	for _, source := range sources {
 		sourcesByID[source.ID] = source
 	}
-	docs := make([]SkillDoc, 0, len(skills))
+	docs := make([]SkillDoc, 0, len(selections))
 	var warnings []string
-	for _, skill := range skills {
+	for _, selection := range selections {
+		skill := selection.Skill
 		source, ok := sourcesByID[skill.SourceID]
 		if !ok {
 			warnings = append(warnings, fmt.Sprintf("skill %q references missing source %q", skill.Name, skill.SourceID))
@@ -231,6 +272,7 @@ func (o *Orchestrator) loadSkillDocs(ctx context.Context, skills []models.Skill)
 			Skill:   skill,
 			Source:  source.Name,
 			Path:    rel,
+			Reason:  selection.Reason,
 			Content: string(content),
 		})
 	}

@@ -36,11 +36,15 @@ type SkillSource struct {
 }
 
 type Skill struct {
-	Name         string `json:"name"`
-	Source       string `json:"source"`
-	PathInSource string `json:"path_in_source"`
-	Version      string `json:"version"`
-	Archived     bool   `json:"archived"`
+	Name              string   `json:"name"`
+	Source            string   `json:"source"`
+	PathInSource      string   `json:"path_in_source"`
+	Version           string   `json:"version"`
+	Archived          bool     `json:"archived"`
+	RecommendedAgents []string `json:"recommended_agents"`
+	TriggerKeywords   []string `json:"trigger_keywords"`
+	TriggerTags       []string `json:"trigger_tags"`
+	Notes             string   `json:"notes"`
 }
 
 type LifecycleStep struct {
@@ -162,8 +166,34 @@ func parseSkills() ([]SkillSource, []Skill, error) {
 	for i := range f.Skills {
 		f.Skills[i].Name = strings.TrimSpace(f.Skills[i].Name)
 		f.Skills[i].Source = strings.TrimSpace(f.Skills[i].Source)
+		f.Skills[i].PathInSource = strings.TrimSpace(f.Skills[i].PathInSource)
+		f.Skills[i].Version = strings.TrimSpace(f.Skills[i].Version)
+		f.Skills[i].Notes = strings.TrimSpace(f.Skills[i].Notes)
+		f.Skills[i].RecommendedAgents = trimStrings(f.Skills[i].RecommendedAgents)
+		f.Skills[i].TriggerKeywords = trimLowerStrings(f.Skills[i].TriggerKeywords)
+		f.Skills[i].TriggerTags = trimLowerStrings(f.Skills[i].TriggerTags)
 	}
 	return f.Sources, f.Skills, nil
+}
+
+func trimStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func trimLowerStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.ToLower(strings.TrimSpace(value)); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func parseLifecycles() ([]Lifecycle, error) {
@@ -217,11 +247,19 @@ func (c *Config) validate() error {
 		if sk.Name == "" {
 			return fmt.Errorf("skills.json: skill name required")
 		}
+		if sk.PathInSource == "" {
+			return fmt.Errorf("skills.json: skill %q path_in_source required", sk.Name)
+		}
 		if sk.Source != "" && !sourceNames[sk.Source] {
 			return fmt.Errorf("skills.json: skill %q references unknown source %q", sk.Name, sk.Source)
 		}
 		if skillNames[sk.Name] {
 			return fmt.Errorf("skills.json: duplicate skill name %q", sk.Name)
+		}
+		for _, agentID := range sk.RecommendedAgents {
+			if !agentIDs[agentID] {
+				return fmt.Errorf("skills.json: skill %q recommends unknown agent %q", sk.Name, agentID)
+			}
 		}
 		skillNames[sk.Name] = true
 	}
@@ -268,6 +306,58 @@ func (c *Config) validate() error {
 		return fmt.Errorf("lifecycles.json: missing lifecycle %q", DefaultLifecycleID)
 	}
 	return nil
+}
+
+// RecommendedSkillNames returns installed-skill names that should be embedded
+// for this run in addition to the agent's assigned skills.
+func (c *Config) RecommendedSkillNames(agentID, title, description, lifecycleID string, tags []string) []string {
+	text := strings.ToLower(strings.Join([]string{title, description, lifecycleID}, "\n"))
+	tagSet := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		tagSet[strings.ToLower(strings.TrimSpace(tag))] = true
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, skill := range c.Skills {
+		if !skillRecommendedForAgent(skill, agentID) {
+			continue
+		}
+		if !skillMatchesTask(skill, text, tagSet) {
+			continue
+		}
+		if seen[skill.Name] {
+			continue
+		}
+		seen[skill.Name] = true
+		out = append(out, skill.Name)
+	}
+	return out
+}
+
+func skillRecommendedForAgent(skill Skill, agentID string) bool {
+	if len(skill.RecommendedAgents) == 0 {
+		return false
+	}
+	for _, id := range skill.RecommendedAgents {
+		if id == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+func skillMatchesTask(skill Skill, text string, tagSet map[string]bool) bool {
+	for _, tag := range skill.TriggerTags {
+		if tagSet[tag] {
+			return true
+		}
+	}
+	for _, keyword := range skill.TriggerKeywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 // AgentByID returns the agent definition or false if not found.

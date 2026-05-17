@@ -14,13 +14,85 @@
     }
   ],
   "skills": [
-    { "name": "product-manager",    "source": "ace3", "path_in_source": "skills/product-manager/SKILL.md",    "version": "" },
-    { "name": "research",           "source": "ace3", "path_in_source": "skills/research/SKILL.md",           "version": "" },
-    { "name": "engineering-manager","source": "ace3", "path_in_source": "skills/engineering-manager/SKILL.md","version": "" },
-    { "name": "backend-developer",  "source": "ace3", "path_in_source": "skills/backend-developer/SKILL.md",  "version": "" },
-    { "name": "frontend-developer", "source": "ace3", "path_in_source": "skills/frontend-developer/SKILL.md", "version": "" },
-    { "name": "qa-manager",         "source": "ace3", "path_in_source": "skills/qa-manager/SKILL.md",         "version": "" },
-    { "name": "qa-engineer",        "source": "ace3", "path_in_source": "skills/qa-engineer/SKILL.md",        "version": "" },
-    { "name": "qa-tester",          "source": "ace3", "path_in_source": "skills/qa-tester/SKILL.md",          "version": "" }
+    {
+      "name": "product-manager",
+      "source": "ace3",
+      "path_in_source": "skills/product-manager/SKILL.md",
+      "version": "",
+      "recommended_agents": ["pm"],
+      "trigger_keywords": ["requirements", "prd", "acceptance", "scope", "user story", "product"],
+      "trigger_tags": ["needs-product", "skip-planning"],
+      "notes": "Use when task intent, acceptance criteria, or scope needs product shaping."
+    },
+    {
+      "name": "research",
+      "source": "ace3",
+      "path_in_source": "skills/research/SKILL.md",
+      "version": "",
+      "recommended_agents": ["pm", "em"],
+      "trigger_keywords": ["research", "investigate", "compare", "current", "latest", "unknown", "docs"],
+      "trigger_tags": ["needs-research"],
+      "notes": "Use when external or repo evidence is needed before planning."
+    },
+    {
+      "name": "engineering-manager",
+      "source": "ace3",
+      "path_in_source": "skills/engineering-manager/SKILL.md",
+      "version": "",
+      "recommended_agents": ["em"],
+      "trigger_keywords": ["architecture", "plan", "interfaces", "migration", "risk", "rollout"],
+      "trigger_tags": ["needs-planning", "backend-only", "frontend-only"],
+      "notes": "Use to decompose work, choose boundaries, and set routing tags."
+    },
+    {
+      "name": "backend-developer",
+      "source": "ace3",
+      "path_in_source": "skills/backend-developer/SKILL.md",
+      "version": "",
+      "recommended_agents": ["backend", "em"],
+      "trigger_keywords": ["api", "backend", "database", "sql", "migration", "queue", "worker", "server", "endpoint"],
+      "trigger_tags": ["backend-only", "no-frontend"],
+      "notes": "Use for backend implementation or backend-heavy planning."
+    },
+    {
+      "name": "frontend-developer",
+      "source": "ace3",
+      "path_in_source": "skills/frontend-developer/SKILL.md",
+      "version": "",
+      "recommended_agents": ["frontend", "em"],
+      "trigger_keywords": ["ui", "frontend", "react", "page", "browser", "form", "layout", "css", "component"],
+      "trigger_tags": ["frontend-only", "no-backend"],
+      "notes": "Use for user-facing UI, browser verification, and frontend planning."
+    },
+    {
+      "name": "qa-manager",
+      "source": "ace3",
+      "path_in_source": "skills/qa-manager/SKILL.md",
+      "version": "",
+      "recommended_agents": ["qa", "em"],
+      "trigger_keywords": ["test plan", "acceptance", "coverage", "regression", "quality"],
+      "trigger_tags": ["needs-qa"],
+      "notes": "Use for test strategy and acceptance coverage."
+    },
+    {
+      "name": "qa-engineer",
+      "source": "ace3",
+      "path_in_source": "skills/qa-engineer/SKILL.md",
+      "version": "",
+      "recommended_agents": ["qa", "backend", "frontend"],
+      "trigger_keywords": ["unit test", "integration test", "contract test", "e2e", "test"],
+      "trigger_tags": ["needs-tests"],
+      "notes": "Use for implementing or designing automated tests."
+    },
+    {
+      "name": "qa-tester",
+      "source": "ace3",
+      "path_in_source": "skills/qa-tester/SKILL.md",
+      "version": "",
+      "recommended_agents": ["qa", "frontend"],
+      "trigger_keywords": ["verify", "browser", "manual test", "smoke", "retest", "screenshot"],
+      "trigger_tags": ["needs-qa", "needs-browser"],
+      "notes": "Use for runtime, browser, and smoke-test verification."
+    }
   ]
 }

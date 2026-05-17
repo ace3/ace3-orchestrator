@@ -86,3 +86,34 @@ func TestCreateTaskArtifactRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOrchestratorMapRoute(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM skill_sources ORDER BY name")).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "upstream_url", "pinned_sha", "last_synced_at", "kind", "has_update", "created_at", "updated_at"}).
+			AddRow("source-1", "ace3", "https://example.test/skills", "main", now, "ace3", false, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false ORDER BY ss.name, s.name`)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "created_at", "updated_at"}).
+			AddRow("skill-1", "source-1", "backend-developer", "skills/backend-developer/SKILL.md", "", false, now, now))
+
+	handler := NewRouter(config.Config{APIToken: "test-token"}, store.New(sqlx.NewDb(rawDB, "sqlmock"), nil), nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/orchestrator-map", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"recommended_agents":["backend","em"]`) {
+		t.Fatalf("unexpected response: %s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

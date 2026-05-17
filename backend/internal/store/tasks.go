@@ -491,6 +491,20 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	if err := validateTaskStatus(status); err != nil {
 		return err
 	}
+	nextTags := task.Tags
+	if update.Tags != nil {
+		nextTags = pq.StringArray(normalizeTags(*update.Tags))
+	}
+	nextLifecycleID := task.LifecycleID
+	if update.LifecycleID != nil && strings.TrimSpace(*update.LifecycleID) != "" && !strings.EqualFold(strings.TrimSpace(*update.LifecycleID), "null") {
+		nextLifecycleID = strings.TrimSpace(*update.LifecycleID)
+		if err := validateLifecycleID(nextLifecycleID); err != nil {
+			return err
+		}
+	}
+	nextTask := task
+	nextTask.Tags = nextTags
+	nextTask.LifecycleID = nextLifecycleID
 	if _, err := tx.ExecContext(ctx, "INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)", uuid.NewString(), task.ID, "agent:"+agent.ID, update.Comment); err != nil {
 		return err
 	}
@@ -502,7 +516,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		}
 		assignee = resolved
 	} else if !update.RequestHumanReview && status == "done" {
-		next, err := advanceLifecycleTx(ctx, tx, task)
+		next, err := advanceLifecycleTx(ctx, tx, nextTask)
 		if err != nil {
 			return err
 		}
@@ -511,7 +525,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 			status = "todo"
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, updated_at=now() WHERE id=$1", task.ID, status, assignee); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, tags=$4, lifecycle_id=$5, updated_at=now() WHERE id=$1", task.ID, status, assignee, nextTags, nextLifecycleID); err != nil {
 		return err
 	}
 	for _, subtask := range update.CreateSubtasks {
@@ -525,7 +539,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 			subtaskAssignee = resolved
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority, tags, lifecycle_id)
-			VALUES ($1,$2,$3,$4,$5,'todo',$6,$7,$8,$9,$10)`, id, task.ProjectID, task.RepoID, subtask.Title, subtask.Description, subtaskAssignee, task.ID, task.Priority, task.Tags, task.LifecycleID); err != nil {
+			VALUES ($1,$2,$3,$4,$5,'todo',$6,$7,$8,$9,$10)`, id, task.ProjectID, task.RepoID, subtask.Title, subtask.Description, subtaskAssignee, task.ID, task.Priority, nextTags, nextLifecycleID); err != nil {
 			return err
 		}
 		if subtask.InitialComment != "" {
@@ -636,6 +650,8 @@ type TaskUpdates struct {
 	Status             string       `json:"status"`
 	Comment            string       `json:"comment"`
 	ReassignTo         *string      `json:"reassign_to"`
+	Tags               *[]string    `json:"tags,omitempty"`
+	LifecycleID        *string      `json:"lifecycle_id,omitempty"`
 	RequestHumanReview bool         `json:"request_human_review"`
 	KeepWorktree       bool         `json:"keep_worktree"`
 	CreateSubtasks     []Subtask    `json:"create_subtasks"`
@@ -765,6 +781,31 @@ func validateTaskStatus(status string) error {
 	default:
 		return errors.New("invalid task status")
 	}
+}
+
+func normalizeTags(tags []string) []string {
+	out := make([]string, 0, len(tags))
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		normalized := strings.ToLower(strings.TrimSpace(tag))
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func validateLifecycleID(id string) error {
+	cfg, err := repoconfig.Load()
+	if err != nil {
+		return err
+	}
+	if _, ok := cfg.LifecycleByID(id); !ok {
+		return fmt.Errorf("unknown lifecycle %q", id)
+	}
+	return nil
 }
 
 func mapNotFound(err error) error {

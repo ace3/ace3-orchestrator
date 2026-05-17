@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, Boxes, Check, FolderGit2, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
+import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
   BootstrapStatus,
   Comment,
+  OrchestratorMap,
   Project,
   Run,
   RunEvent,
   Skill,
+  SkillTreeEntry,
   SkillSource,
   Task,
   TaskArtifact,
@@ -24,6 +26,9 @@ import {
   eventsURL,
   getAgent,
   getBootstrapStatus,
+  getOrchestratorMap,
+  getSkillContent,
+  getSkillTree,
   getProject,
   getToken,
   heartbeat,
@@ -48,7 +53,7 @@ import {
   updateProject
 } from "./lib/api";
 
-type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent" | "skills";
+type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent" | "skills" | "map";
 
 type RouteState = {
   route: Route;
@@ -69,6 +74,7 @@ function routeFromPath(pathname = window.location.pathname): RouteState {
   if (parts[0] === "agents" && parts[1]) return { route: "agent", projectId: null, agentId: parts[1] };
   if (parts[0] === "agents") return { route: "agents", projectId: null, agentId: null };
   if (parts[0] === "skills") return { route: "skills", projectId: null, agentId: null };
+  if (parts[0] === "map") return { route: "map", projectId: null, agentId: null };
   return { route: "projects", projectId: null, agentId: null };
 }
 
@@ -80,6 +86,7 @@ function pathForRoute(next: Route, id?: string) {
     case "agents": return "/agents";
     case "agent": return id ? `/agents/${encodeURIComponent(id)}` : "/agents";
     case "skills": return "/skills";
+    case "map": return "/map";
     case "projects":
     default: return "/projects";
   }
@@ -198,6 +205,7 @@ function App() {
         <button className={route === "projects" || route === "project" || route === "board" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
         <button className={route === "agents" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
+        <button className={route === "map" ? "active" : ""} onClick={() => navigate("map")}><GitBranch size={16} /> Map</button>
         <div className="sidebar-footer">
           <ThemeSwitcher />
           <label className="token">API token<input value={token} onChange={(event) => { updateToken(event.target.value); setToken(event.target.value); }} /></label>
@@ -211,6 +219,7 @@ function App() {
         {route === "agents" && <AgentsPage openAgent={(id) => navigate("agent", id)} />}
         {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} />}
         {route === "skills" && <SkillSourcesPage />}
+        {route === "map" && <MapPage />}
       </section>
     </main>
   );
@@ -434,7 +443,7 @@ function BoardPage({ id }: { id: string }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [taskForm, setTaskForm] = useState({ title: "", description: "", assignee_agent_id: "pm", priority: 0 });
+  const [taskForm, setTaskForm] = useState({ title: "", description: "", assignee_agent_id: "pm", priority: 0, tags: "", lifecycle_id: "default" });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => readStatusFilter());
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
   const [error, setError] = useState("");
@@ -494,9 +503,10 @@ function BoardPage({ id }: { id: string }) {
     const current = project;
     if (!current) return;
     try {
-      const task = await createTask(current.id, { ...taskForm, assignee_agent_id: taskForm.assignee_agent_id || null, repo_id: current.repos?.[0]?.id || null, status: "todo" });
+      const tags = taskForm.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
+      const task = await createTask(current.id, { ...taskForm, tags, lifecycle_id: taskForm.lifecycle_id, assignee_agent_id: taskForm.assignee_agent_id || null, repo_id: current.repos?.[0]?.id || null, status: "todo" });
       setTasks([task, ...tasks]);
-      setTaskForm({ title: "", description: "", assignee_agent_id: "pm", priority: 0 });
+      setTaskForm({ title: "", description: "", assignee_agent_id: "pm", priority: 0, tags: "", lifecycle_id: "default" });
     } catch (e) { setError((e as Error).message); }
   }
   async function moveTask(task: Task, status: Task["status"]) {
@@ -511,6 +521,12 @@ function BoardPage({ id }: { id: string }) {
       <input placeholder="New task title" value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} required />
       <input placeholder="Description" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} />
       <select value={taskForm.assignee_agent_id} onChange={(e) => setTaskForm({ ...taskForm, assignee_agent_id: e.target.value })}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select>
+      <select value={taskForm.lifecycle_id} onChange={(e) => setTaskForm({ ...taskForm, lifecycle_id: e.target.value })}>
+        <option value="default">Default</option>
+        <option value="backend-only">Backend only</option>
+        <option value="frontend-only">Frontend only</option>
+      </select>
+      <input placeholder="Tags, comma-separated" value={taskForm.tags} onChange={(e) => setTaskForm({ ...taskForm, tags: e.target.value })} />
       <button><Plus size={16} /> Add task</button>
       <button type="button" onClick={async () => { await heartbeat(); setTasks(await listTasks(project.id)); }}><RefreshCw size={16} /> Heartbeat</button>
     </form>
@@ -597,6 +613,10 @@ function Kanban({ tasks, agents, onOpen, onMove }: { tasks: Task[]; agents: Agen
                       </div>
                       <h3 className="task-title">{task.title}</h3>
                       {task.description && <p className="task-desc">{task.description}</p>}
+                      {(task.lifecycle_id || task.tags?.length > 0) && <div className="tag-row">
+                        {task.lifecycle_id && <span>{task.lifecycle_id}</span>}
+                        {(task.tags || []).slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
+                      </div>}
                       <div className="task-footer">
                         <span className="task-chip agent" title={aName}>
                           <span className="task-avatar" aria-hidden="true">{initialsOf(aName)}</span>
@@ -670,7 +690,8 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   return <div className="drawer">
     <div className="drawer-header"><h2>{task.title}</h2><button onClick={onClose}>Close</button></div>
     <p>{task.description || "No description"}</p>
-    <span>{agents.find((agent) => agent.id === task.assignee_agent_id)?.name || "Unassigned"} · {task.status} · retries {task.retry_count}</span>
+    <span>{agents.find((agent) => agent.id === task.assignee_agent_id)?.name || "Unassigned"} · {task.status} · {task.lifecycle_id || "default"} · retries {task.retry_count}</span>
+    {(task.tags || []).length > 0 && <div className="tag-row">{task.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
     <div className="toolbar"><button onClick={async () => { await runTask(task.id); await onRefresh(); setRuns(await listRuns(task.id)); }}><Play size={16} /> Run now</button></div>
     <h3>Artifacts</h3>
     <div className="artifacts">
@@ -733,15 +754,24 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
 
 function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [error, setError] = useState("");
-  useEffect(() => { listAgents().then(setAgents).catch((e) => setError(e.message)); }, []);
+  useEffect(() => {
+    Promise.all([listAgents(), getOrchestratorMap()])
+      .then(([nextAgents, nextMap]) => { setAgents(nextAgents); setMap(nextMap); })
+      .catch((e) => setError(e.message));
+  }, []);
 
   return <Panel title="Agents">
     <div className="list">
-      {agents.map((agent) => <article className="clickable" key={agent.id} onClick={() => openAgent(agent.id)}>
+      {agents.map((agent) => {
+        const mapAgent = map?.agents.find((item) => item.id === agent.id);
+        return <article className="clickable" key={agent.id} onClick={() => openAgent(agent.id)}>
         <h3>{agent.name}</h3>
         <span>{agent.role} · {agent.cli_kind} · {agent.enabled ? "enabled" : "disabled"} · {agent.skills?.length || 0} skills</span>
-      </article>)}
+        {mapAgent && <p className="empty-state">Recommended: {mapAgent.recommended_skills.length ? mapAgent.recommended_skills.join(", ") : "none"}</p>}
+      </article>;
+      })}
     </div>
     <Error text={error} />
   </Panel>;
@@ -749,14 +779,17 @@ function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
 
 function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) => void }) {
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     getAgent(id).then(setAgent).catch((e) => setError(e.message));
+    getOrchestratorMap().then(setMap).catch(() => undefined);
   }, [id]);
 
   if (!agent) return <Panel title="Agent"><Error text={error || "Loading..."} /></Panel>;
+  const mapAgent = map?.agents.find((item) => item.id === agent.id);
 
   async function save() {
     const current = agent;
@@ -779,6 +812,10 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
       <pre>{agent.base_prompt || agent.role_prompt}</pre>
       <h2 className="section-title">Skills</h2>
       <div className="skill-picker">{(agent.skills || []).map((skill) => <label key={skill.id}><input type="checkbox" checked readOnly /> <span>{skill.name}</span></label>)}</div>
+      {mapAgent && <>
+        <h2 className="section-title">Dynamic Recommendations</h2>
+        <div className="skill-picker">{mapAgent.recommended_skills.map((skill) => <label key={skill}><input type="checkbox" checked readOnly /> <span>{skill}</span></label>)}</div>
+      </>}
       {agent.definition_hash && <p className="empty-state">Definition hash: {agent.definition_hash}</p>}
       <div className="toolbar">
         <button onClick={save} disabled={busy}><Save size={16} /> Save</button>
@@ -792,6 +829,9 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
 function SkillSourcesPage() {
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
+  const [tree, setTree] = useState<SkillTreeEntry | null>(null);
+  const [content, setContent] = useState<{ path: string; content: string } | null>(null);
   const [sha, setSha] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   async function refresh() {
@@ -801,6 +841,28 @@ function SkillSourcesPage() {
   }
   useEffect(() => { refresh().catch((e) => setError(e.message)); }, []);
   const sourceNames = useMemo(() => Object.fromEntries(sources.map((source) => [source.id, source.name])), [sources]);
+
+  async function openSkill(skill: Skill, path = "SKILL.md") {
+    setSelectedSkill(skill);
+    setError("");
+    try {
+      const [nextTree, nextContent] = await Promise.all([getSkillTree(skill.id), getSkillContent(skill.id, path)]);
+      setTree(nextTree.root);
+      setContent({ path: nextContent.path, content: nextContent.content });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function openFile(path: string) {
+    if (!selectedSkill) return;
+    try {
+      const nextContent = await getSkillContent(selectedSkill.id, path);
+      setContent({ path: nextContent.path, content: nextContent.content });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   return <Panel title="Skill Sources">
     <Error text={error} />
@@ -827,7 +889,7 @@ function SkillSourcesPage() {
             </tr>
           </thead>
           <tbody>
-            {skills.map((skill) => <tr key={skill.id}>
+            {skills.map((skill) => <tr key={skill.id} className={selectedSkill?.id === skill.id ? "selected-row" : ""} onClick={() => openSkill(skill)}>
               <td>{skill.name}</td>
               <td>{sourceNames[skill.source_id] || skill.source_id}</td>
               <td>{skill.path_in_source}</td>
@@ -836,6 +898,90 @@ function SkillSourcesPage() {
           </tbody>
         </table>
       </div>}
+    <h2 className="section-title">Browse Skill Content</h2>
+    {!selectedSkill ? <p className="empty-state">Select an installed skill to browse its synced files.</p> :
+      <div className="browser-grid">
+        <div className="tree-pane">
+          <h3>{selectedSkill.name}</h3>
+          {tree ? <SkillTree node={tree} onOpen={openFile} /> : <p className="empty-state">Loading tree...</p>}
+        </div>
+        <div className="preview-pane">
+          <div className="artifact-head"><strong>{content?.path || "SKILL.md"}</strong><span>{sourceNames[selectedSkill.source_id] || selectedSkill.source_id}</span></div>
+          <pre>{content?.content || "No preview available."}</pre>
+        </div>
+      </div>}
+  </Panel>;
+}
+
+function SkillTree({ node, onOpen }: { node: SkillTreeEntry; onOpen: (path: string) => void }) {
+  if (node.type === "file") {
+    return <button type="button" className="tree-file" onClick={() => onOpen(node.path)}><FileText size={14} /> {node.name}</button>;
+  }
+  return <div className="tree-dir">
+    {node.path && <span>{node.name}</span>}
+    <div>
+      {(node.children || []).map((child) => <SkillTree key={`${child.type}:${child.path}`} node={child} onOpen={onOpen} />)}
+    </div>
+  </div>;
+}
+
+function MapPage() {
+  const [map, setMap] = useState<OrchestratorMap | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { getOrchestratorMap().then(setMap).catch((e) => setError(e.message)); }, []);
+  if (!map) return <Panel title="Orchestrator Map"><Error text={error || "Loading..."} /></Panel>;
+
+  const skillsBySource = map.sources.map((source) => ({
+    source,
+    skills: map.skills.filter((skill) => skill.source_id === source.id),
+  }));
+
+  return <Panel title="Orchestrator Map">
+    <Error text={error} />
+    <div className="map-grid">
+      <article>
+        <h2 className="section-title">Sources - Skills - Recommendations</h2>
+        <div className="map-tree">
+          {skillsBySource.map(({ source, skills }) => <div className="map-node" key={source.id}>
+            <strong>{source.name}</strong>
+            <span>{source.kind} · pinned {source.pinned_sha}</span>
+            <div className="map-children">
+              {skills.map((skill) => <div className="map-node skill" key={skill.id}>
+                <strong>{skill.name}</strong>
+                <span>{skill.path_in_source}</span>
+                {(skill.recommended_agents || []).length > 0 && <div className="tag-row">{skill.recommended_agents.map((agent) => <span key={agent}>{agent}</span>)}</div>}
+                {(skill.trigger_tags || []).length > 0 && <p className="empty-state">Tags: {skill.trigger_tags.join(", ")}</p>}
+              </div>)}
+            </div>
+          </div>)}
+        </div>
+      </article>
+      <article>
+        <h2 className="section-title">Agents - Prompt - Skills</h2>
+        <div className="map-tree">
+          {map.agents.map((agent) => <div className="map-node" key={agent.id}>
+            <strong>{agent.name}</strong>
+            <span>{agent.role} · {agent.cli_kind}</span>
+            <p>{agent.base_prompt}</p>
+            <div className="tag-row">{agent.assigned_skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
+            {agent.recommended_skills.length > 0 && <p className="empty-state">Dynamic: {agent.recommended_skills.join(", ")}</p>}
+          </div>)}
+        </div>
+      </article>
+    </div>
+    <h2 className="section-title">Lifecycle Routing</h2>
+    <div className="list">
+      {map.lifecycles.map((lifecycle) => <article key={lifecycle.id}>
+        <h3>{lifecycle.id}</h3>
+        <p>{lifecycle.description}</p>
+        <div className="map-flow">
+          {lifecycle.steps.map((step, index) => <React.Fragment key={`${lifecycle.id}:${step.agent}:${index}`}>
+            <span>{step.agent}{step.skip_when.length ? ` · skip: ${step.skip_when.join(", ")}` : ""}</span>
+            {index < lifecycle.steps.length - 1 && <em>-&gt;</em>}
+          </React.Fragment>)}
+        </div>
+      </article>)}
+    </div>
   </Panel>;
 }
 

@@ -12,6 +12,7 @@ type SkillDoc struct {
 	Skill   models.Skill
 	Source  string
 	Path    string
+	Reason  string
 	Content string
 }
 
@@ -23,8 +24,18 @@ func BuildPromptWithSkillDocs(agent models.Agent, task models.Task, repo *models
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== AGENT ===\nID: %s\nName: %s\nRole: %s\n\n", agent.ID, agent.Name, agent.Role)
 	fmt.Fprintf(&b, "=== ACTIVE SKILLS ===\n")
-	for _, skill := range agent.Skills {
-		fmt.Fprintf(&b, "- %s\n", skill.Name)
+	if len(skillDocs) > 0 {
+		for _, doc := range skillDocs {
+			reason := doc.Reason
+			if reason == "" {
+				reason = "assigned"
+			}
+			fmt.Fprintf(&b, "- %s (%s)\n", doc.Skill.Name, reason)
+		}
+	} else {
+		for _, skill := range agent.Skills {
+			fmt.Fprintf(&b, "- %s (assigned)\n", skill.Name)
+		}
 	}
 	writeSkillDocs(&b, skillDocs)
 	fmt.Fprintf(&b, "\n=== TASK ===\nID: %s\nTitle: %s\nDescription: %s\nStatus: %s\nPriority: %d\n", task.ID, task.Title, task.Description, task.Status, task.Priority)
@@ -68,6 +79,8 @@ Respond ONLY with a single JSON object matching this schema. No markdown, prose,
     "status": "todo|in_progress|in_review|blocked|done",
     "comment": "required summary, max 2000 chars",
     "reassign_to": "pm|em|backend|frontend|qa|<custom>|null",
+    "tags": ["frontend-only|backend-only|no-backend|no-frontend|skip-qa|skip-planning|needs-research|needs-tests|needs-browser"],
+    "lifecycle_id": "default|backend-only|frontend-only|null",
     "request_human_review": false,
     "keep_worktree": false,
     "create_subtasks": [
@@ -86,6 +99,7 @@ Respond ONLY with a single JSON object matching this schema. No markdown, prose,
 
 Routing notes:
 - If you set "reassign_to", that explicit choice overrides the lifecycle.
+- Use "tags" and "lifecycle_id" to make the lifecycle skip irrelevant steps when the task is clearly backend-only, frontend-only, already planned, or does not need QA.
 - If you omit "reassign_to" and set status to "done", the task auto-advances to
   the next non-skipped step shown under "PLANNED REMAINING STEPS" below.
 - Use "request_human_review" when you need a human to inspect before advancing.
@@ -102,6 +116,9 @@ func writeSkillDocs(b *strings.Builder, skillDocs []SkillDoc) {
 	}
 	for _, doc := range skillDocs {
 		fmt.Fprintf(b, "--- %s", doc.Skill.Name)
+		if doc.Reason != "" {
+			fmt.Fprintf(b, " [%s]", doc.Reason)
+		}
 		if doc.Source != "" {
 			fmt.Fprintf(b, " from %s", doc.Source)
 		}

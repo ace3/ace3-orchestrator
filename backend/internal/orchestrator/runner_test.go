@@ -112,11 +112,16 @@ func TestBuildPromptIncludesActiveSkillInstructions(t *testing.T) {
 			Skill:   models.Skill{ID: "skill-1", Name: "backend-developer"},
 			Source:  "ace3",
 			Path:    "skills/backend-developer/SKILL.md",
+			Reason:  "recommended",
 			Content: "Use repository-local backend conventions.",
 		}},
 	)
 	if !strings.Contains(prompt, "=== ACTIVE SKILL INSTRUCTIONS ===") ||
+		!strings.Contains(prompt, "- backend-developer (recommended)") ||
+		!strings.Contains(prompt, "--- backend-developer [recommended] from ace3") ||
 		!strings.Contains(prompt, "Use repository-local backend conventions.") ||
+		!strings.Contains(prompt, `"tags":`) ||
+		!strings.Contains(prompt, `"lifecycle_id":`) ||
 		!strings.Contains(prompt, "Use only the active skills and skill instructions embedded in this prompt") {
 		t.Fatalf("prompt did not include active skill instructions:\n%s", prompt)
 	}

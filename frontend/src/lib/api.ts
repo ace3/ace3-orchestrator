@@ -20,6 +20,25 @@ export type Skill = {
   archived: boolean;
 };
 
+export type SkillTreeEntry = {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  children?: SkillTreeEntry[];
+};
+
+export type SkillTreeResponse = {
+  skill: Skill;
+  source: SkillSource;
+  root: SkillTreeEntry;
+};
+
+export type SkillContentResponse = {
+  skill_id: string;
+  path: string;
+  content: string;
+};
+
 export type SkillSource = {
   id: string;
   name: string;
@@ -50,6 +69,8 @@ export type Task = {
   parent_id: string | null;
   priority: number;
   retry_count: number;
+  tags: string[];
+  lifecycle_id: string;
 };
 
 export type TaskArtifact = {
@@ -105,6 +126,37 @@ export type Repo = {
 export type BootstrapStatus = {
   bootstrapped: boolean;
   agents_count: number;
+};
+
+export type OrchestratorMapSkill = Skill & {
+  source_name: string;
+  recommended_agents: string[];
+  trigger_keywords: string[];
+  trigger_tags: string[];
+  notes: string;
+};
+
+export type OrchestratorMapAgent = {
+  id: string;
+  name: string;
+  role: string;
+  cli_kind: "claude" | "codex";
+  base_prompt: string;
+  assigned_skills: string[];
+  recommended_skills: string[];
+};
+
+export type OrchestratorMapLifecycle = {
+  id: string;
+  description: string;
+  steps: Array<{ agent: string; skip_when: string[] }>;
+};
+
+export type OrchestratorMap = {
+  sources: SkillSource[];
+  skills: OrchestratorMapSkill[];
+  agents: OrchestratorMapAgent[];
+  lifecycles: OrchestratorMapLifecycle[];
 };
 
 function resolveAPIBase() {
@@ -188,6 +240,9 @@ export const listRuns = (taskId: string) => api<Run[]>(`/tasks/${taskId}/runs`);
 export const listRunEvents = (runId: string, since = 0) => api<RunEvent[]>(`/runs/${runId}/events?since=${since}`);
 export const heartbeat = () => api<{ queued: number }>("/heartbeat", { method: "POST" });
 export const listInstalledSkills = () => api<Skill[]>("/skills");
+export const getSkillTree = (id: string) => api<SkillTreeResponse>(`/skills/${id}/tree`);
+export const getSkillContent = (id: string, path = "SKILL.md") => api<SkillContentResponse>(`/skills/${id}/content?path=${encodeURIComponent(path)}`);
 export const listSkillSources = () => api<SkillSource[]>("/skill-sources");
 export const syncSkillSource = (id: string) => api<SkillSource>(`/skill-sources/${id}/sync`, { method: "POST" });
 export const pinSkillSource = (id: string, sha: string) => api<SkillSource>(`/skill-sources/${id}/pin`, { method: "POST", body: JSON.stringify({ sha }) });
+export const getOrchestratorMap = () => api<OrchestratorMap>("/orchestrator-map");

@@ -332,6 +332,17 @@ func (s *Store) ListInstalledSkills(ctx context.Context) ([]models.Skill, error)
 	return skills, s.db.SelectContext(ctx, &skills, `SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false ORDER BY ss.name, s.name`)
 }
 
+func (s *Store) GetSkill(ctx context.Context, id string) (models.Skill, error) {
+	var skill models.Skill
+	if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE id=$1 AND archived=false", id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return skill, ErrNotFound
+		}
+		return skill, err
+	}
+	return skill, nil
+}
+
 func (s *Store) GetSkillSource(ctx context.Context, id string) (models.SkillSource, error) {
 	var source models.SkillSource
 	if err := s.db.GetContext(ctx, &source, "SELECT * FROM skill_sources WHERE id=$1", id); err != nil {
