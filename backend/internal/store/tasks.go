@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -62,9 +63,13 @@ func (s *Store) CreateTask(ctx context.Context, projectID string, in TaskInput) 
 	if err := validateTaskStatus(status); err != nil {
 		return models.Task{}, err
 	}
+	assignee, err := s.resolveAgentRef(ctx, in.AssigneeAgentID)
+	if err != nil {
+		return models.Task{}, err
+	}
 	id := uuid.NewString()
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, projectID, in.RepoID, strings.TrimSpace(in.Title), in.Description, status, in.AssigneeAgentID, in.ParentID, in.Priority); err != nil {
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, id, projectID, in.RepoID, strings.TrimSpace(in.Title), in.Description, status, assignee, in.ParentID, in.Priority); err != nil {
 		return models.Task{}, err
 	}
 	s.Notify(ctx, "task", id)
@@ -90,7 +95,11 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in TaskInput) (models
 		task.RepoID = in.RepoID
 	}
 	if in.AssigneeAgentID != nil {
-		task.AssigneeAgentID = in.AssigneeAgentID
+		assignee, err := s.resolveAgentRef(ctx, in.AssigneeAgentID)
+		if err != nil {
+			return task, err
+		}
+		task.AssigneeAgentID = assignee
 	}
 	if in.ParentID != nil {
 		task.ParentID = in.ParentID
@@ -327,11 +336,11 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	}
 	var assignee *string = task.AssigneeAgentID
 	if update.ReassignTo != nil && *update.ReassignTo != "" {
-		resolved, err := resolveAgentID(ctx, tx, *update.ReassignTo)
+		resolved, err := resolveAgentRefTx(ctx, tx, update.ReassignTo)
 		if err != nil {
 			return err
 		}
-		assignee = &resolved
+		assignee = resolved
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, updated_at=now() WHERE id=$1", task.ID, status, assignee); err != nil {
 		return err
@@ -340,11 +349,11 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		id := uuid.NewString()
 		var subtaskAssignee *string
 		if subtask.AssigneeAgentID != nil && *subtask.AssigneeAgentID != "" {
-			resolved, err := resolveAgentID(ctx, tx, *subtask.AssigneeAgentID)
+			resolved, err := resolveAgentRefTx(ctx, tx, subtask.AssigneeAgentID)
 			if err != nil {
 				return err
 			}
-			subtaskAssignee = &resolved
+			subtaskAssignee = resolved
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority)
 			VALUES ($1,$2,$3,$4,$5,'todo',$6,$7,$8)`, id, task.ProjectID, task.RepoID, subtask.Title, subtask.Description, subtaskAssignee, task.ID, task.Priority); err != nil {
@@ -359,10 +368,44 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	return nil
 }
 
-func resolveAgentID(ctx context.Context, tx *sqlx.Tx, value string) (string, error) {
+func (s *Store) resolveAgentRef(ctx context.Context, value *string) (*string, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	resolved, err := resolveAgentRefQuery(ctx, s.db, *value)
+	if err != nil {
+		return nil, err
+	}
+	return &resolved, nil
+}
+
+func resolveAgentRefTx(ctx context.Context, tx *sqlx.Tx, value *string) (*string, error) {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return nil, nil
+	}
+	resolved, err := resolveAgentRefQuery(ctx, tx, *value)
+	if err != nil {
+		return nil, err
+	}
+	return &resolved, nil
+}
+
+type agentResolver interface {
+	GetContext(context.Context, any, string, ...any) error
+}
+
+func resolveAgentRefQuery(ctx context.Context, q agentResolver, value string) (string, error) {
+	ref := strings.TrimSpace(value)
 	var id string
-	if err := tx.GetContext(ctx, &id, "SELECT id FROM agents WHERE id=$1 OR role=$1 ORDER BY id LIMIT 1", value); err != nil {
-		return "", mapNotFound(err)
+	err := q.GetContext(ctx, &id, `SELECT id FROM agents
+		WHERE id=$1 OR role=$1 OR name=$1
+		ORDER BY CASE WHEN id=$1 THEN 0 WHEN role=$1 THEN 1 ELSE 2 END, id
+		LIMIT 1`, ref)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no rows") {
+			return "", fmt.Errorf("unknown task assignee %q", ref)
+		}
+		return "", err
 	}
 	return id, nil
 }

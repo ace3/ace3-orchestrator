@@ -23,6 +23,45 @@ make docker-ps
 
 Backend runs on `:8081`; frontend dev server proxies `/api` to it.
 
+### Local host-run development
+
+Use this when you want to run only Postgres in Docker and run the app processes on your host.
+
+```sh
+make local-db-up
+make local-backend
+make local-frontend
+```
+
+Open `http://localhost:5173` and use API token `dev-token`.
+Backend start targets run `make local-db-check` first and stop with a clear message if the db-only Compose service is not running.
+
+To run the host backend and frontend together in one terminal:
+
+```sh
+make local-dev
+```
+
+`make local-backend` loads `deploy/.env.local` and runs the backend in `MP_RUNNER_MODE=mock`. This is the safe default for UI/API testing because task runs are deterministic and do not call real CLIs.
+
+To run real Codex or Claude from your host shell:
+
+```sh
+make local-db-up
+make local-backend-cli
+make local-frontend
+```
+
+Or run both app processes together:
+
+```sh
+make local-dev-cli
+```
+
+`make local-backend-cli` loads `deploy/.env.local.cli` and uses `MP_RUNNER_MODE=cli`. The host `codex` and/or `claude` commands must already be installed, authenticated, and available on `PATH`; the backend inherits your host environment, so no Docker credential mounts are used.
+
+Local data lives in the `mini-paperclip-local_mp_local_pgdata` Docker volume. `make local-db-down` preserves the volume. If port `5432` is already in use, edit `POSTGRES_PORT` in `deploy/.env.local`; the local backend DSN uses that value. If port `8081` is already in use, edit `MP_PORT`; `make local-frontend` points Vite at that backend port.
+
 ## Safety Defaults
 
 - All `/api/*` endpoints require `Authorization: Bearer $MP_API_TOKEN`.

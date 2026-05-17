@@ -1,4 +1,6 @@
 deploy/.env
+deploy/.env.local
+deploy/.env.local.cli
 frontend/dist/
 frontend/node_modules/
 frontend/*.tsbuildinfo
