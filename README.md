@@ -44,6 +44,16 @@ make local-dev
 
 `make local-backend` loads `deploy/.env.local` and runs the backend in `MP_RUNNER_MODE=mock`. This is the safe default for UI/API testing because task runs are deterministic and do not call real CLIs.
 
+#### Lifecycle smoke test
+
+With `make local-dev` already running in another terminal, push one task through the full PM → EM → Backend → Frontend → QA pipeline:
+
+```sh
+./scripts/smoke-pipeline.sh
+```
+
+The script targets `http://127.0.0.1:18081` with token `dev-token` (override via `BASE_URL` / `API_TOKEN`). It idempotently finds-or-creates a `smoke-pipeline` project, creates a fresh "Add debug health endpoint" task, polls the run to `done`, then re-runs the same task to verify idempotency. Exits non-zero with the event tail on failure. Re-run it after every code change to confirm the orchestrator still walks the lifecycle cleanly.
+
 To run real Codex or Claude from your host shell:
 
 ```sh
