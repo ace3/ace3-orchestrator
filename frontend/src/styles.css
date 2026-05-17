@@ -343,6 +343,33 @@ a:hover { color: var(--accent-hover); }
   align-items: center;
 }
 
+.board-filters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: end;
+  margin: 0 0 10px;
+}
+.board-filters label {
+  display: grid;
+  gap: 4px;
+  min-width: 180px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.board-filters span {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.filtered-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 0 0 10px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
 /* ---------- Lists & cards ---------- */
 .list { display: grid; gap: 6px; }
 article {
@@ -928,6 +955,8 @@ pre {
 /* ---------- Responsive ---------- */
 @media (max-width: 820px) {
   main, .split, .grid-form, .task-form, .confirm-form { grid-template-columns: 1fr; }
+  .board-filters { display: grid; }
+  .board-filters label { min-width: 0; }
   .kanban { grid-auto-columns: 260px; }
   aside { position: static; height: auto; }
 }

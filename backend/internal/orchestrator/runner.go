@@ -177,14 +177,61 @@ func stream(r io.Reader, out *bytes.Buffer, level string, req RunRequest, metric
 }
 
 func blockedOutputReason(line string) string {
-	lower := strings.ToLower(line)
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "{") {
+		var event any
+		if json.Unmarshal([]byte(trimmed), &event) == nil {
+			for _, command := range jsonCommandCandidates(event) {
+				if reason := blockedTextReason(command); reason != "" {
+					return reason
+				}
+			}
+			return ""
+		}
+	}
+	return blockedTextReason(line)
+}
+
+func blockedTextReason(text string) string {
+	lower := strings.ToLower(text)
 	blocked := []string{"curl ", "wget ", "curl|", "wget|", "python3 -c", "python -c", "perl -e", "docker.sock", "sudo "}
 	for _, pattern := range blocked {
 		if strings.Contains(lower, pattern) {
 			return "runner output matched blocked shell pattern: " + pattern
 		}
 	}
+	longRunning := []string{"npm run dev", "vite --host"}
+	for _, pattern := range longRunning {
+		if strings.Contains(lower, pattern) {
+			return "runner output matched long-running command pattern: " + pattern
+		}
+	}
 	return ""
+}
+
+func jsonCommandCandidates(value any) []string {
+	var out []string
+	var walk func(any)
+	walk = func(v any) {
+		switch item := v.(type) {
+		case []any:
+			for _, child := range item {
+				walk(child)
+			}
+		case map[string]any:
+			for key, child := range item {
+				if key == "command" {
+					if command, ok := child.(string); ok {
+						out = append(out, command)
+					}
+					continue
+				}
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return out
 }
 
 func ParseAgentResponse(output string) (store.AgentResponse, error) {

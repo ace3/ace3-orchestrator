@@ -335,7 +335,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		return err
 	}
 	var assignee *string = task.AssigneeAgentID
-	if update.ReassignTo != nil && *update.ReassignTo != "" {
+	if !emptyAgentRef(update.ReassignTo) {
 		resolved, err := resolveAgentRefTx(ctx, tx, update.ReassignTo)
 		if err != nil {
 			return err
@@ -348,7 +348,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	for _, subtask := range update.CreateSubtasks {
 		id := uuid.NewString()
 		var subtaskAssignee *string
-		if subtask.AssigneeAgentID != nil && *subtask.AssigneeAgentID != "" {
+		if !emptyAgentRef(subtask.AssigneeAgentID) {
 			resolved, err := resolveAgentRefTx(ctx, tx, subtask.AssigneeAgentID)
 			if err != nil {
 				return err
@@ -369,7 +369,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 }
 
 func (s *Store) resolveAgentRef(ctx context.Context, value *string) (*string, error) {
-	if value == nil || strings.TrimSpace(*value) == "" {
+	if emptyAgentRef(value) {
 		return nil, nil
 	}
 	resolved, err := resolveAgentRefQuery(ctx, s.db, *value)
@@ -380,7 +380,7 @@ func (s *Store) resolveAgentRef(ctx context.Context, value *string) (*string, er
 }
 
 func resolveAgentRefTx(ctx context.Context, tx *sqlx.Tx, value *string) (*string, error) {
-	if value == nil || strings.TrimSpace(*value) == "" {
+	if emptyAgentRef(value) {
 		return nil, nil
 	}
 	resolved, err := resolveAgentRefQuery(ctx, tx, *value)
@@ -388,6 +388,14 @@ func resolveAgentRefTx(ctx context.Context, tx *sqlx.Tx, value *string) (*string
 		return nil, err
 	}
 	return &resolved, nil
+}
+
+func emptyAgentRef(value *string) bool {
+	if value == nil {
+		return true
+	}
+	ref := strings.TrimSpace(*value)
+	return ref == "" || strings.EqualFold(ref, "null")
 }
 
 type agentResolver interface {

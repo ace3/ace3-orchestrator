@@ -92,6 +92,41 @@ func TestCreateTaskCanonicalizesRoleAssignee(t *testing.T) {
 	}
 }
 
+func TestCreateTaskTreatsStringNullAssigneeAsUnassigned(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	insertQuery := `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`
+	mock.ExpectExec(regexp.QuoteMeta(insertQuery)).
+		WithArgs(sqlmock.AnyArg(), "project-1", nil, "Do work", "", "todo", nil, nil, 0).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "repo_id", "title", "description", "status", "assignee_agent_id", "parent_id", "priority", "retry_count", "created_at", "updated_at"}).
+			AddRow("task-1", "project-1", nil, "Do work", "", "todo", nil, nil, 0, 0, now, now))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	assignee := "null"
+	task, err := store.CreateTask(context.Background(), "project-1", TaskInput{Title: "Do work", AssigneeAgentID: &assignee})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.AssigneeAgentID != nil {
+		t.Fatalf("got assignee %v, want nil", *task.AssigneeAgentID)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreateTaskReturnsClearUnknownAssigneeError(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {

@@ -395,12 +395,31 @@ function ProjectPage({ id, onOpenBoard, onDeleted }: { id: string; onOpenBoard: 
   </Panel>;
 }
 
+type StatusFilter = "all" | Task["status"];
+type AssigneeFilter = "all" | "unassigned" | string;
+
+const TASK_STATUSES: Task["status"][] = ["todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+
+function readStatusFilter(): StatusFilter {
+  const value = new URLSearchParams(window.location.search).get("status");
+  return value && TASK_STATUSES.includes(value as Task["status"]) ? value as Task["status"] : "all";
+}
+
+function readAssigneeFilter(agents: Agent[]): AssigneeFilter {
+  const value = new URLSearchParams(window.location.search).get("assignee");
+  if (!value) return "all";
+  if (value === "unassigned") return value;
+  return agents.some((agent) => agent.id === value) ? value : "all";
+}
+
 function BoardPage({ id }: { id: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [taskForm, setTaskForm] = useState({ title: "", description: "", assignee_agent_id: "pm", priority: 0 });
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => readStatusFilter());
+  const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -412,7 +431,46 @@ function BoardPage({ id }: { id: string }) {
     return () => events.close();
   }, [id]);
 
+  useEffect(() => {
+    setAssigneeFilter(readAssigneeFilter(agents));
+  }, [agents]);
+
+  useEffect(() => {
+    function syncFiltersFromHistory() {
+      setStatusFilter(readStatusFilter());
+      setAssigneeFilter(readAssigneeFilter(agents));
+    }
+    window.addEventListener("popstate", syncFiltersFromHistory);
+    return () => window.removeEventListener("popstate", syncFiltersFromHistory);
+  }, [agents]);
+
   if (!project) return <Panel title="Board"><Error text={error || "Loading..."} /></Panel>;
+
+  const filteredTasks = tasks.filter((task) => {
+    if (statusFilter !== "all" && task.status !== statusFilter) return false;
+    if (assigneeFilter === "unassigned") return task.assignee_agent_id === null;
+    if (assigneeFilter !== "all" && task.assignee_agent_id !== assigneeFilter) return false;
+    return true;
+  });
+  const filtersActive = statusFilter !== "all" || assigneeFilter !== "all";
+
+  function updateFilters(nextStatus: StatusFilter, nextAssignee: AssigneeFilter) {
+    const params = new URLSearchParams(window.location.search);
+    if (nextStatus === "all") {
+      params.delete("status");
+    } else {
+      params.set("status", nextStatus);
+    }
+    if (nextAssignee === "all") {
+      params.delete("assignee");
+    } else {
+      params.set("assignee", nextAssignee);
+    }
+    const query = params.toString();
+    window.history.pushState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    setStatusFilter(nextStatus);
+    setAssigneeFilter(nextAssignee);
+  }
 
   async function submitTask(event: React.FormEvent) {
     event.preventDefault();
@@ -439,7 +497,25 @@ function BoardPage({ id }: { id: string }) {
       <button><Plus size={16} /> Add task</button>
       <button type="button" onClick={async () => { await heartbeat(); setTasks(await listTasks(project.id)); }}><RefreshCw size={16} /> Heartbeat</button>
     </form>
-    <Kanban tasks={tasks} agents={agents} onOpen={setSelectedTask} onMove={moveTask} />
+    <div className="board-filters" aria-label="Board filters">
+      <label>
+        <span>Status</span>
+        <select value={statusFilter} onChange={(e) => updateFilters(e.target.value as StatusFilter, assigneeFilter)}>
+          <option value="all">All statuses</option>
+          {TASK_STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABELS[status]}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Assignee</span>
+        <select value={assigneeFilter} onChange={(e) => updateFilters(statusFilter, e.target.value)}>
+          <option value="all">All assignees</option>
+          <option value="unassigned">Unassigned</option>
+          {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+        </select>
+      </label>
+    </div>
+    {filtersActive && filteredTasks.length === 0 && <p className="filtered-empty">No tasks match the selected filters.</p>}
+    <Kanban tasks={filteredTasks} agents={agents} onOpen={setSelectedTask} onMove={moveTask} />
     {selectedTask && <TaskDrawer task={selectedTask} agents={agents} onClose={() => setSelectedTask(null)} onRefresh={async () => { setTasks(await listTasks(project.id)); setSelectedTask(await updateTask(selectedTask.id, selectedTask)); }} />}
   </Panel>;
 }
@@ -471,11 +547,10 @@ function shortId(id: string): string {
 }
 
 function Kanban({ tasks, agents, onOpen, onMove }: { tasks: Task[]; agents: Agent[]; onOpen: (task: Task) => void; onMove: (task: Task, status: Task["status"]) => void }) {
-  const statuses: Task["status"][] = ["todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
   const agentName = (id: string | null) => agents.find((agent) => agent.id === id)?.name || id || "Unassigned";
   return (
     <div className="kanban">
-      {statuses.map((status) => {
+      {TASK_STATUSES.map((status) => {
         const items = tasks.filter((task) => task.status === status);
         return (
           <section className="column" key={status}>
@@ -516,7 +591,7 @@ function Kanban({ tasks, agents, onOpen, onMove }: { tasks: Task[]; agents: Agen
                           onChange={(e) => onMove(task, e.target.value as Task["status"])}
                           aria-label="Move task"
                         >
-                          {statuses.map((item) => <option key={item} value={item}>{STATUS_LABELS[item]}</option>)}
+                          {TASK_STATUSES.map((item) => <option key={item} value={item}>{STATUS_LABELS[item]}</option>)}
                         </select>
                       </div>
                     </article>
