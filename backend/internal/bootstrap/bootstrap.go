@@ -50,9 +50,6 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 	if err := s.upsertSkillSourcesFromConfig(ctx, cfg); err != nil {
 		return status, err
 	}
-	if err := s.upsertSkillsFromConfig(ctx, cfg); err != nil {
-		return status, err
-	}
 	sources, err := s.store.ListSkillSources(ctx)
 	if err != nil {
 		return status, err
@@ -61,6 +58,9 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 		if err := s.SyncSource(ctx, source.ID); err != nil {
 			slog.Warn("skill source sync failed; continuing with JSON catalog", "source", source.Name, "error", err)
 		}
+	}
+	if err := s.upsertMissingSkillsFromConfig(ctx, cfg); err != nil {
+		return status, err
 	}
 	skillsByName, err := s.skillsByName(ctx)
 	if err != nil {
@@ -82,12 +82,11 @@ func (s *Service) upsertSkillSourcesFromConfig(ctx context.Context, cfg *repocon
 		byName[src.Name] = src
 	}
 	for _, src := range cfg.SkillSources {
-		id := byName[src.Name].ID
-		if id == "" {
-			id = uuid.NewString()
+		if byName[src.Name].ID != "" {
+			continue
 		}
 		if err := s.store.UpsertSkillSource(ctx, models.SkillSource{
-			ID:          id,
+			ID:          uuid.NewString(),
 			Name:        src.Name,
 			UpstreamURL: src.UpstreamURL,
 			PinnedSHA:   src.PinnedSHA,
@@ -99,7 +98,7 @@ func (s *Service) upsertSkillSourcesFromConfig(ctx context.Context, cfg *repocon
 	return nil
 }
 
-func (s *Service) upsertSkillsFromConfig(ctx context.Context, cfg *repoconfig.Config) error {
+func (s *Service) upsertMissingSkillsFromConfig(ctx context.Context, cfg *repoconfig.Config) error {
 	sources, err := s.store.ListSkillSources(ctx)
 	if err != nil {
 		return err
@@ -108,15 +107,22 @@ func (s *Service) upsertSkillsFromConfig(ctx context.Context, cfg *repoconfig.Co
 	for _, src := range sources {
 		sourceIDByName[src.Name] = src.ID
 	}
-	existing, err := s.allSkillsByName(ctx)
+	counts, err := s.store.ActiveSkillCountsBySource(ctx)
 	if err != nil {
 		return err
 	}
 	bySource := make(map[string][]models.Skill)
+	existing, err := s.allSkillsByName(ctx)
+	if err != nil {
+		return err
+	}
 	for _, sk := range cfg.Skills {
 		sourceID := sourceIDByName[sk.Source]
 		if sourceID == "" {
 			return fmt.Errorf("skills.json: skill %q references source %q which is not loaded", sk.Name, sk.Source)
+		}
+		if counts[sourceID] > 0 {
+			continue
 		}
 		id := existing[sk.Name].ID
 		if id == "" {
@@ -171,6 +177,11 @@ func (s *Service) SyncAgentDefinitions(ctx context.Context, skillsByName map[str
 				return fmt.Errorf("agent %q requires missing skill %q", def.ID, name)
 			}
 			skillIDs = append(skillIDs, skill.ID)
+		}
+		if _, err := s.store.GetAgent(ctx, def.ID); err == nil {
+			continue
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
 		}
 		if _, err := s.store.SyncRepoAgent(ctx, store.AgentInput{
 			ID:         def.ID,

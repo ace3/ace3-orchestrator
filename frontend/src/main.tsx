@@ -17,12 +17,17 @@ import {
   TaskArtifact,
   addComment,
   addRepo,
+  createAgent,
+  createSkillSource,
   createTaskArtifact,
   createProject,
   createTask,
+  deleteAgent,
+  deleteSkillSource,
   deleteTaskArtifact,
   deleteProject,
   deleteRepo,
+  duplicateAgent,
   eventsURL,
   getAgent,
   getBootstrapStatus,
@@ -755,14 +760,49 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
 function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [map, setMap] = useState<OrchestratorMap | null>(null);
+  const [form, setForm] = useState({
+    id: "",
+    name: "",
+    role: "",
+    role_prompt: "",
+    cli_kind: "codex" as Agent["cli_kind"],
+  });
   const [error, setError] = useState("");
+  async function refresh() {
+    const [nextAgents, nextMap] = await Promise.all([listAgents(), getOrchestratorMap()]);
+    setAgents(nextAgents);
+    setMap(nextMap);
+  }
   useEffect(() => {
-    Promise.all([listAgents(), getOrchestratorMap()])
-      .then(([nextAgents, nextMap]) => { setAgents(nextAgents); setMap(nextMap); })
-      .catch((e) => setError(e.message));
+    refresh().catch((e) => setError(e.message));
   }, []);
 
   return <Panel title="Agents">
+    <form className="editor" onSubmit={async (e) => {
+      e.preventDefault();
+      setError("");
+      try {
+        const created = await createAgent({ ...form, enabled: true, skill_ids: [] });
+        setForm({ id: "", name: "", role: "", role_prompt: "", cli_kind: "codex" });
+        await refresh();
+        openAgent(created.id);
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }}>
+      <h2 className="section-title">Create Agent</h2>
+      <div className="form-grid">
+        <input value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} placeholder="Optional stable ID" />
+        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" required />
+        <input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} placeholder="Role" required />
+        <select value={form.cli_kind} onChange={(e) => setForm({ ...form, cli_kind: e.target.value as Agent["cli_kind"] })}>
+          <option value="codex">codex</option>
+          <option value="claude">claude</option>
+        </select>
+      </div>
+      <textarea value={form.role_prompt} onChange={(e) => setForm({ ...form, role_prompt: e.target.value })} placeholder="System prompt" required />
+      <button><Plus size={16} /> Create agent</button>
+    </form>
     <div className="list">
       {agents.map((agent) => {
         const mapAgent = map?.agents.find((item) => item.id === agent.id);
@@ -770,6 +810,10 @@ function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
         <h3>{agent.name}</h3>
         <span>{agent.role} · {agent.cli_kind} · {agent.enabled ? "enabled" : "disabled"} · {agent.skills?.length || 0} skills</span>
         {mapAgent && <p className="empty-state">Recommended: {mapAgent.recommended_skills.length ? mapAgent.recommended_skills.join(", ") : "none"}</p>}
+        <div className="toolbar">
+          <button type="button" onClick={async (e) => { e.stopPropagation(); const copy = await duplicateAgent(agent.id); await refresh(); openAgent(copy.id); }}><Plus size={16} /> Duplicate</button>
+          <button type="button" onClick={async (e) => { e.stopPropagation(); await deleteAgent(agent.id); await refresh(); }}><Trash2 size={16} /> Delete</button>
+        </div>
       </article>;
       })}
     </div>
@@ -779,13 +823,19 @@ function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
 
 function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) => void }) {
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    getAgent(id).then(setAgent).catch((e) => setError(e.message));
-    getOrchestratorMap().then(setMap).catch(() => undefined);
+    Promise.all([getAgent(id), listInstalledSkills(), getOrchestratorMap()])
+      .then(([nextAgent, nextSkills, nextMap]) => {
+        setAgent(nextAgent);
+        setSkills(nextSkills);
+        setMap(nextMap);
+      })
+      .catch((e) => setError(e.message));
   }, [id]);
 
   if (!agent) return <Panel title="Agent"><Error text={error || "Loading..."} /></Panel>;
@@ -796,22 +846,45 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
     if (!current) return;
     setBusy(true);
     try {
-      const saved = await updateAgent(current.id, { enabled: current.enabled, cli_profile: current.cli_profile });
+      const saved = await updateAgent(current.id, {
+        name: current.name,
+        role: current.role,
+        role_prompt: current.role_prompt,
+        cli_kind: current.cli_kind,
+        cli_profile: current.cli_profile,
+        enabled: current.enabled,
+        skill_ids: (current.skills || []).map((skill) => skill.id),
+      });
       setAgent(saved);
       onSaved(saved.id);
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
 
+  function toggleSkill(skill: Skill, checked: boolean) {
+    const currentSkills = agent?.skills || [];
+    const nextSkills = checked
+      ? [...currentSkills.filter((item) => item.id !== skill.id), skill].sort((a, b) => a.name.localeCompare(b.name))
+      : currentSkills.filter((item) => item.id !== skill.id);
+    if (agent) setAgent({ ...agent, skills: nextSkills });
+  }
+
   return <Panel title={agent.name}>
     <div className="editor">
-      <input value={agent.name} readOnly aria-label="Agent name" />
-      <input value={agent.role} readOnly aria-label="Agent role" />
-      <input value={agent.cli_kind} readOnly aria-label="Agent CLI" />
+      <input value={agent.name} onChange={(e) => setAgent({ ...agent, name: e.target.value })} aria-label="Agent name" />
+      <input value={agent.role} onChange={(e) => setAgent({ ...agent, role: e.target.value })} aria-label="Agent role" />
+      <select value={agent.cli_kind} onChange={(e) => setAgent({ ...agent, cli_kind: e.target.value as Agent["cli_kind"] })} aria-label="Agent CLI">
+        <option value="codex">codex</option>
+        <option value="claude">claude</option>
+      </select>
+      <input value={agent.cli_profile || ""} onChange={(e) => setAgent({ ...agent, cli_profile: e.target.value || null })} placeholder="CLI profile" />
       <label><input type="checkbox" checked={agent.enabled} onChange={(e) => setAgent({ ...agent, enabled: e.target.checked })} /> Enabled</label>
-      <h2 className="section-title">Base Prompt</h2>
-      <pre>{agent.base_prompt || agent.role_prompt}</pre>
+      <h2 className="section-title">System Prompt</h2>
+      <textarea value={agent.role_prompt} onChange={(e) => setAgent({ ...agent, role_prompt: e.target.value })} />
       <h2 className="section-title">Skills</h2>
-      <div className="skill-picker">{(agent.skills || []).map((skill) => <label key={skill.id}><input type="checkbox" checked readOnly /> <span>{skill.name}</span></label>)}</div>
+      <div className="skill-picker">{skills.map((skill) => {
+        const checked = Boolean((agent.skills || []).find((item) => item.id === skill.id));
+        return <label key={skill.id}><input type="checkbox" checked={checked} onChange={(e) => toggleSkill(skill, e.target.checked)} /> <span>{skill.name}</span></label>;
+      })}</div>
       {mapAgent && <>
         <h2 className="section-title">Dynamic Recommendations</h2>
         <div className="skill-picker">{mapAgent.recommended_skills.map((skill) => <label key={skill}><input type="checkbox" checked readOnly /> <span>{skill}</span></label>)}</div>
@@ -833,6 +906,12 @@ function SkillSourcesPage() {
   const [tree, setTree] = useState<SkillTreeEntry | null>(null);
   const [content, setContent] = useState<{ path: string; content: string } | null>(null);
   const [sha, setSha] = useState<Record<string, string>>({});
+  const [form, setForm] = useState({
+    name: "",
+    upstream_url: "",
+    pinned_sha: "main",
+    kind: "custom",
+  });
   const [error, setError] = useState("");
   async function refresh() {
     const [nextSources, nextSkills] = await Promise.all([listSkillSources(), listInstalledSkills()]);
@@ -866,6 +945,30 @@ function SkillSourcesPage() {
 
   return <Panel title="Skill Sources">
     <Error text={error} />
+    <form className="editor" onSubmit={async (e) => {
+      e.preventDefault();
+      setError("");
+      try {
+        await createSkillSource(form);
+        setForm({ name: "", upstream_url: "", pinned_sha: "main", kind: "custom" });
+        await refresh();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    }}>
+      <h2 className="section-title">Add Source</h2>
+      <div className="form-grid">
+        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" required />
+        <input value={form.upstream_url} onChange={(e) => setForm({ ...form, upstream_url: e.target.value })} placeholder="Git URL" required />
+        <input value={form.pinned_sha} onChange={(e) => setForm({ ...form, pinned_sha: e.target.value })} placeholder="Pinned SHA or branch" required />
+        <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+          <option value="custom">custom</option>
+          <option value="ace3">ace3</option>
+          <option value="verzth">verzth</option>
+        </select>
+      </div>
+      <button><Plus size={16} /> Add source</button>
+    </form>
     <div className="list">{sources.map((source) => <article key={source.id}>
       <h3>{source.name}</h3>
       <p>{source.upstream_url}</p>
@@ -874,6 +977,7 @@ function SkillSourcesPage() {
         <button onClick={async () => { await syncSkillSource(source.id); await refresh(); }}><RefreshCw size={16} /> Sync</button>
         <input placeholder="New SHA" value={sha[source.id] || ""} onChange={(e) => setSha({ ...sha, [source.id]: e.target.value })} />
         <button onClick={async () => { await pinSkillSource(source.id, sha[source.id]); await refresh(); }}>Pin</button>
+        <button onClick={async () => { await deleteSkillSource(source.id); await refresh(); }}><Trash2 size={16} /> Delete</button>
       </div>
     </article>)}</div>
     <h2 className="section-title">Installed Skills</h2>

@@ -1,20 +1,18 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
-	"mini-paperclip/backend/internal/agentdefs"
 	"mini-paperclip/backend/internal/auth"
 	"mini-paperclip/backend/internal/bootstrap"
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/fsutil"
 	"mini-paperclip/backend/internal/httpx"
-	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/orchestrator"
+	"mini-paperclip/backend/internal/repoconfig"
 	"mini-paperclip/backend/internal/store"
 )
 
@@ -71,8 +69,10 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Get("/skills/{id}/tree", api.getSkillTree)
 		r.Get("/skills/{id}/content", api.getSkillContent)
 		r.Get("/skill-sources", api.listSkillSources)
+		r.Post("/skill-sources", api.createSkillSource)
 		r.Post("/skill-sources/{id}/sync", api.syncSkillSource)
 		r.Post("/skill-sources/{id}/pin", api.pinSkillSource)
+		r.Delete("/skill-sources/{id}", api.deleteSkillSource)
 		r.Get("/orchestrator-map", api.orchestratorMap)
 		r.Post("/heartbeat", api.heartbeat)
 		r.Get("/events", api.events)
@@ -92,21 +92,21 @@ func (a *API) bootstrapRun(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) listAgents(w http.ResponseWriter, r *http.Request) {
 	agents, err := a.store.ListAgents(r.Context())
-	if err == nil {
-		agents, err = a.hydrateAgents(r.Context(), agents)
-	}
 	respond(w, agents, err)
 }
 
 func (a *API) createAgent(w http.ResponseWriter, r *http.Request) {
-	httpx.Error(w, http.StatusMethodNotAllowed, "repo_locked_agents", "agents are defined in the repo and cannot be created through the API")
+	var in store.AgentInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	agent, err := a.store.CreateAgent(r.Context(), in)
+	respondCreated(w, agent, err)
 }
 
 func (a *API) getAgent(w http.ResponseWriter, r *http.Request) {
 	agent, err := a.store.GetAgent(r.Context(), chi.URLParam(r, "id"))
-	if err == nil {
-		agent, err = a.hydrateAgent(r.Context(), agent)
-	}
 	respond(w, agent, err)
 }
 
@@ -116,19 +116,27 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	agent, err := a.store.UpdateAgentRuntime(r.Context(), chi.URLParam(r, "id"), in)
-	if err == nil {
-		agent, err = a.hydrateAgent(r.Context(), agent)
-	}
+	agent, err := a.store.UpdateAgent(r.Context(), chi.URLParam(r, "id"), in)
 	respond(w, agent, err)
 }
 
 func (a *API) deleteAgent(w http.ResponseWriter, r *http.Request) {
-	httpx.Error(w, http.StatusMethodNotAllowed, "repo_locked_agents", "repo-defined agents cannot be deleted through the API")
+	id := chi.URLParam(r, "id")
+	if lifecycleReferencesAgent(id) {
+		respond(w, nil, store.ErrConflict)
+		return
+	}
+	err := a.store.DeleteAgent(r.Context(), id)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 func (a *API) duplicateAgent(w http.ResponseWriter, r *http.Request) {
-	httpx.Error(w, http.StatusMethodNotAllowed, "repo_locked_agents", "repo-defined agents cannot be duplicated through the API")
+	agent, err := a.store.DuplicateAgent(r.Context(), chi.URLParam(r, "id"))
+	respondCreated(w, agent, err)
 }
 
 func (a *API) setAgentEnabled(w http.ResponseWriter, r *http.Request) {
@@ -140,34 +148,22 @@ func (a *API) setAgentEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agent, err := a.store.SetAgentEnabled(r.Context(), chi.URLParam(r, "id"), body.Enabled)
-	if err == nil {
-		agent, err = a.hydrateAgent(r.Context(), agent)
-	}
 	respond(w, agent, err)
 }
 
-func (a *API) hydrateAgents(ctx context.Context, agents []models.Agent) ([]models.Agent, error) {
-	out := make([]models.Agent, 0, len(agents))
-	for _, agent := range agents {
-		hydrated, err := a.hydrateAgent(ctx, agent)
-		if err != nil {
-			return nil, err
+func lifecycleReferencesAgent(id string) bool {
+	cfg, err := repoconfig.Load()
+	if err != nil {
+		return false
+	}
+	for _, lifecycle := range cfg.Lifecycles {
+		for _, step := range lifecycle.Steps {
+			if step.Agent == id {
+				return true
+			}
 		}
-		out = append(out, hydrated)
 	}
-	return out, nil
-}
-
-func (a *API) hydrateAgent(ctx context.Context, agent models.Agent) (models.Agent, error) {
-	def, err := agentdefs.Find(agent.ID)
-	if err != nil {
-		return models.Agent{}, err
-	}
-	skills, err := a.store.SkillsByName(ctx, def.Skills)
-	if err != nil {
-		return models.Agent{}, err
-	}
-	return agentdefs.Apply(agent, def, skills), nil
+	return false
 }
 
 func (a *API) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -247,6 +243,16 @@ func (a *API) listSkillSources(w http.ResponseWriter, r *http.Request) {
 	respond(w, sources, err)
 }
 
+func (a *API) createSkillSource(w http.ResponseWriter, r *http.Request) {
+	var in store.SkillSourceInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	source, err := a.store.CreateSkillSource(r.Context(), in)
+	respondCreated(w, source, err)
+}
+
 func (a *API) listInstalledSkills(w http.ResponseWriter, r *http.Request) {
 	skills, err := a.store.ListInstalledSkills(r.Context())
 	respond(w, skills, err)
@@ -273,6 +279,15 @@ func (a *API) pinSkillSource(w http.ResponseWriter, r *http.Request) {
 	}
 	source, err := a.bootstrap.PinSource(r.Context(), chi.URLParam(r, "id"), body.SHA)
 	respond(w, source, err)
+}
+
+func (a *API) deleteSkillSource(w http.ResponseWriter, r *http.Request) {
+	err := a.store.DeleteSkillSource(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 func respondCreated(w http.ResponseWriter, value any, err error) {

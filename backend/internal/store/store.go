@@ -354,6 +354,40 @@ func (s *Store) GetSkillSource(ctx context.Context, id string) (models.SkillSour
 	return source, nil
 }
 
+type SkillSourceInput struct {
+	Name        string `json:"name"`
+	UpstreamURL string `json:"upstream_url"`
+	PinnedSHA   string `json:"pinned_sha"`
+	Kind        string `json:"kind"`
+}
+
+func (s *Store) CreateSkillSource(ctx context.Context, in SkillSourceInput) (models.SkillSource, error) {
+	source := models.SkillSource{
+		ID:          uuid.NewString(),
+		Name:        strings.TrimSpace(in.Name),
+		UpstreamURL: strings.TrimSpace(in.UpstreamURL),
+		PinnedSHA:   strings.TrimSpace(in.PinnedSHA),
+		Kind:        strings.TrimSpace(in.Kind),
+	}
+	if source.PinnedSHA == "" {
+		source.PinnedSHA = "main"
+	}
+	if source.Kind == "" {
+		source.Kind = "custom"
+	}
+	if source.Name == "" || source.UpstreamURL == "" {
+		return models.SkillSource{}, fmt.Errorf("name and upstream_url are required")
+	}
+	if err := validateSkillSourceKind(source.Kind); err != nil {
+		return models.SkillSource{}, err
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO skill_sources (id, name, upstream_url, pinned_sha, kind)
+		VALUES ($1,$2,$3,$4,$5)`, source.ID, source.Name, source.UpstreamURL, source.PinnedSHA, source.Kind); err != nil {
+		return models.SkillSource{}, err
+	}
+	return s.GetSkillSource(ctx, source.ID)
+}
+
 func (s *Store) UpsertSkillSource(ctx context.Context, source models.SkillSource) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO skill_sources (id, name, upstream_url, pinned_sha, kind)
 		VALUES ($1,$2,$3,$4,$5)
@@ -367,6 +401,28 @@ func (s *Store) PinSkillSource(ctx context.Context, id, sha string) (models.Skil
 		return models.SkillSource{}, err
 	}
 	return s.GetSkillSource(ctx, id)
+}
+
+func (s *Store) DeleteSkillSource(ctx context.Context, id string) error {
+	var exists bool
+	if err := s.db.GetContext(ctx, &exists, "SELECT EXISTS (SELECT 1 FROM skill_sources WHERE id=$1)", id); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	var assigned int
+	if err := s.db.GetContext(ctx, &assigned, `SELECT count(*)
+		FROM agent_skills a
+		JOIN skills sk ON sk.id=a.skill_id
+		WHERE sk.source_id=$1 AND sk.archived=false`, id); err != nil {
+		return err
+	}
+	if assigned > 0 {
+		return ErrConflict
+	}
+	_, err := s.db.ExecContext(ctx, "DELETE FROM skill_sources WHERE id=$1", id)
+	return err
 }
 
 func (s *Store) SetSkillSourceUpdate(ctx context.Context, id string, hasUpdate bool) error {
@@ -400,6 +456,22 @@ func (s *Store) UpsertSkillsForSource(ctx context.Context, sourceID string, skil
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) ActiveSkillCountsBySource(ctx context.Context) (map[string]int, error) {
+	type row struct {
+		SourceID string `db:"source_id"`
+		Count    int    `db:"count"`
+	}
+	var rows []row
+	if err := s.db.SelectContext(ctx, &rows, "SELECT source_id, count(*) AS count FROM skills WHERE archived=false GROUP BY source_id"); err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(rows))
+	for _, row := range rows {
+		out[row.SourceID] = row.Count
+	}
+	return out, nil
 }
 
 type ProjectInput struct {
@@ -546,4 +618,11 @@ func validateCLIKind(kind string) error {
 		return nil
 	}
 	return fmt.Errorf("cli_kind must be claude or codex")
+}
+
+func validateSkillSourceKind(kind string) error {
+	if kind == "verzth" || kind == "ace3" || kind == "custom" {
+		return nil
+	}
+	return fmt.Errorf("kind must be verzth, ace3, or custom")
 }

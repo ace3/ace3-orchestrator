@@ -394,6 +394,11 @@ article.clickable:hover { background: var(--bg-hover); }
   display: grid;
   gap: 10px;
 }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
 
 .skill-picker {
   display: grid;

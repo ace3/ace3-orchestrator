@@ -257,15 +257,24 @@ func (a *API) orchestratorMap(w http.ResponseWriter, r *http.Request) {
 		}
 		mapSkills = append(mapSkills, item)
 	}
-	agents := make([]orchestratorMapAgent, 0, len(cfg.Agents))
-	for _, agent := range cfg.Agents {
+	dbAgents, err := a.store.ListAgents(r.Context())
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	agents := make([]orchestratorMapAgent, 0, len(dbAgents))
+	for _, agent := range dbAgents {
+		assignedSkills := make([]string, 0, len(agent.Skills))
+		for _, skill := range agent.Skills {
+			assignedSkills = append(assignedSkills, skill.Name)
+		}
 		agents = append(agents, orchestratorMapAgent{
 			ID:                agent.ID,
 			Name:              agent.Name,
 			Role:              agent.Role,
 			CLIKind:           agent.CLIKind,
-			BasePrompt:        agent.BasePrompt,
-			AssignedSkills:    agent.Skills,
+			BasePrompt:        agent.RolePrompt,
+			AssignedSkills:    assignedSkills,
 			RecommendedSkills: uniqueStrings(recommendedByAgent[agent.ID]),
 		})
 	}

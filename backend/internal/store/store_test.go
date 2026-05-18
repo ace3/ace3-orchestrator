@@ -46,6 +46,62 @@ func TestListInstalledSkillsExcludesArchivedAndOrdersBySourceName(t *testing.T) 
 	}
 }
 
+func TestDeleteSkillSourceRejectsAssignedActiveSkills(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS (SELECT 1 FROM skill_sources WHERE id=$1)")).
+		WithArgs("source-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT count(*)
+		FROM agent_skills a
+		JOIN skills sk ON sk.id=a.skill_id
+		WHERE sk.source_id=$1 AND sk.archived=false`)).
+		WithArgs("source-1").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	err = store.DeleteSkillSource(context.Background(), "source-1")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("got %v, want ErrConflict", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteSkillSourceDeletesUnassignedSource(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS (SELECT 1 FROM skill_sources WHERE id=$1)")).
+		WithArgs("source-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT count(*)
+		FROM agent_skills a
+		JOIN skills sk ON sk.id=a.skill_id
+		WHERE sk.source_id=$1 AND sk.archived=false`)).
+		WithArgs("source-1").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM skill_sources WHERE id=$1")).
+		WithArgs("source-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	if err := store.DeleteSkillSource(context.Background(), "source-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreateTaskArtifactPersistsStructuredContext(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {

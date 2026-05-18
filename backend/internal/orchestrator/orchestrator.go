@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"mini-paperclip/backend/internal/agentdefs"
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/repoconfig"
@@ -119,19 +118,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		o.failRun(ctx, run, "", fmt.Errorf("runner %q is not available", run.CLIKind))
 		return
 	}
-	def, err := agentdefs.Find(agent.ID)
-	if err != nil {
-		o.failRun(ctx, run, "", err)
-		return
-	}
-	defSkills, err := o.store.SkillsByName(ctx, def.Skills)
-	if err != nil {
-		o.failRun(ctx, run, "", err)
-		return
-	}
-	agent = agentdefs.Apply(agent, def, defSkills)
-	defHash := agentdefs.Hash(def)
-	o.store.AppendRunEvent(ctx, run.ID, "info", "agent definition hash: "+defHash)
+	o.store.AppendRunEvent(ctx, run.ID, "info", "agent prompt source: database")
 	runSkills, err := o.runSkillSelections(ctx, agent, task)
 	if err != nil {
 		o.failRun(ctx, run, "", fmt.Errorf("select skill docs: %w", err))
@@ -159,7 +146,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 	prompt := BuildPromptWithSkillDocs(agent, task, repo, comments, artifacts, skillDocs)
 	result, err := runner.Run(ctx, RunRequest{
 		Prompt:       prompt,
-		SystemPrompt: def.BasePrompt,
+		SystemPrompt: agent.RolePrompt,
 		WorktreePath: worktree,
 		Profile:      deref(agent.CLIProfile),
 		Timeout:      o.cfg.CLITimeout,
@@ -169,26 +156,26 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		},
 	})
 	if err != nil {
-		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
+		o.failRun(ctx, run, hashablePrompt(agent.RolePrompt, prompt), err)
 		return
 	}
 	shouldCleanup = !result.Parsed.TaskUpdates.KeepWorktree
 	tx, err := o.store.DB().BeginTxx(ctx, nil)
 	if err != nil {
-		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
+		o.failRun(ctx, run, hashablePrompt(agent.RolePrompt, prompt), err)
 		return
 	}
 	if err := o.store.ApplyAgentResponse(ctx, tx, task, agent, result.Parsed, &run.ID); err != nil {
 		_ = tx.Rollback()
-		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
+		o.failRun(ctx, run, hashablePrompt(agent.RolePrompt, prompt), err)
 		return
 	}
 	if err := tx.Commit(); err != nil {
-		o.failRun(ctx, run, hashablePrompt(def.BasePrompt, prompt), err)
+		o.failRun(ctx, run, hashablePrompt(agent.RolePrompt, prompt), err)
 		return
 	}
 	o.store.Notify(ctx, "task", task.ID)
-	_ = o.store.FinishRun(ctx, run.ID, "done", result.ExitCode, result.TokensIn, result.TokensOut, result.CostUSD, hashablePrompt(def.BasePrompt, prompt), worktree)
+	_ = o.store.FinishRun(ctx, run.ID, "done", result.ExitCode, result.TokensIn, result.TokensOut, result.CostUSD, hashablePrompt(agent.RolePrompt, prompt), worktree)
 }
 
 func (o *Orchestrator) failRun(ctx context.Context, run models.Run, prompt string, err error) {

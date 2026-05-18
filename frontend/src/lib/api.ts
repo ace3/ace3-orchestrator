@@ -243,6 +243,8 @@ export const listInstalledSkills = () => api<Skill[]>("/skills");
 export const getSkillTree = (id: string) => api<SkillTreeResponse>(`/skills/${id}/tree`);
 export const getSkillContent = (id: string, path = "SKILL.md") => api<SkillContentResponse>(`/skills/${id}/content?path=${encodeURIComponent(path)}`);
 export const listSkillSources = () => api<SkillSource[]>("/skill-sources");
+export const createSkillSource = (body: Partial<SkillSource>) => api<SkillSource>("/skill-sources", { method: "POST", body: JSON.stringify(body) });
 export const syncSkillSource = (id: string) => api<SkillSource>(`/skill-sources/${id}/sync`, { method: "POST" });
 export const pinSkillSource = (id: string, sha: string) => api<SkillSource>(`/skill-sources/${id}/pin`, { method: "POST", body: JSON.stringify({ sha }) });
+export const deleteSkillSource = (id: string) => api<{ deleted: boolean }>(`/skill-sources/${id}`, { method: "DELETE" });
 export const getOrchestratorMap = () => api<OrchestratorMap>("/orchestrator-map");

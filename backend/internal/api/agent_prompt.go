@@ -7,5 +7,5 @@ import (
 )
 
 func (a *API) improveAgentPrompt(w http.ResponseWriter, r *http.Request) {
-	httpx.Error(w, http.StatusMethodNotAllowed, "repo_locked_agents", "agent prompts are defined in the repo and cannot be improved through the API")
+	httpx.Error(w, http.StatusMethodNotAllowed, "unsupported_agent_prompt_improve", "agent prompt generation is not supported; edit role_prompt directly")
 }

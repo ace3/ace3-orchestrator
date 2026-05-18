@@ -15,25 +15,100 @@ import (
 	"mini-paperclip/backend/internal/store"
 )
 
-func TestAgentMutatorsAreBlocked(t *testing.T) {
+func TestAgentPromptImproveIsBlocked(t *testing.T) {
 	handler := NewRouter(config.Config{APIToken: "test-token"}, nil, nil, nil)
-	for _, tc := range []struct {
-		method string
-		path   string
-		body   string
-	}{
-		{method: http.MethodPost, path: "/api/agents", body: `{}`},
-		{method: http.MethodDelete, path: "/api/agents/pm"},
-		{method: http.MethodPost, path: "/api/agents/pm/duplicate"},
-		{method: http.MethodPost, path: "/api/agents/pm/improve-prompt", body: `{}`},
-	} {
-		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-		req.Header.Set("Authorization", "Bearer test-token")
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("%s %s got status %d, want 405", tc.method, tc.path, rec.Code)
-		}
+	req := httptest.NewRequest(http.MethodPost, "/api/agents/pm/improve-prompt", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("got status %d, want 405", rec.Code)
+	}
+}
+
+func TestCreateAgentRouteUsesDatabaseState(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO agents (id, name, role, role_prompt, cli_kind, cli_profile, enabled)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)`)).
+		WithArgs("custom", "Custom Agent", "custom", "Use DB prompt.", "codex", nil, true).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM agent_skills WHERE agent_id=$1")).
+		WithArgs("custom").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM agents WHERE id=$1")).
+		WithArgs("custom").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "role", "role_prompt", "cli_kind", "cli_profile", "enabled", "created_at", "updated_at"}).
+			AddRow("custom", "Custom Agent", "custom", "Use DB prompt.", "codex", nil, true, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.* FROM skills s JOIN agent_skills a ON a.skill_id=s.id WHERE a.agent_id=$1 ORDER BY s.name`)).
+		WithArgs("custom").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "created_at", "updated_at"}))
+
+	handler := NewRouter(config.Config{APIToken: "test-token"}, store.New(sqlx.NewDb(rawDB, "sqlmock"), nil), nil, nil)
+	body := `{"id":"custom","name":"Custom Agent","role":"custom","role_prompt":"Use DB prompt.","cli_kind":"codex","enabled":true,"skill_ids":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/agents", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"role_prompt":"Use DB prompt."`) {
+		t.Fatalf("unexpected response: %s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteLifecycleAgentRouteConflicts(t *testing.T) {
+	handler := NewRouter(config.Config{APIToken: "test-token"}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/agents/pm", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("got status %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateSkillSourceRoute(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO skill_sources (id, name, upstream_url, pinned_sha, kind)
+		VALUES ($1,$2,$3,$4,$5)`)).
+		WithArgs(sqlmock.AnyArg(), "custom", "https://example.test/skills.git", "main", "custom").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM skill_sources WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "upstream_url", "pinned_sha", "last_synced_at", "kind", "has_update", "created_at", "updated_at"}).
+			AddRow("source-1", "custom", "https://example.test/skills.git", "main", nil, "custom", false, now, now))
+
+	handler := NewRouter(config.Config{APIToken: "test-token"}, store.New(sqlx.NewDb(rawDB, "sqlmock"), nil), nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/skill-sources", strings.NewReader(`{"name":"custom","upstream_url":"https://example.test/skills.git"}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"name":"custom"`) {
+		t.Fatalf("unexpected response: %s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -101,6 +176,13 @@ func TestOrchestratorMapRoute(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false ORDER BY ss.name, s.name`)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "created_at", "updated_at"}).
 			AddRow("skill-1", "source-1", "backend-developer", "skills/backend-developer/SKILL.md", "", false, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM agents ORDER BY role, name")).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name", "role", "role_prompt", "cli_kind", "cli_profile", "enabled", "created_at", "updated_at"}).
+			AddRow("custom-backend", "Custom Backend", "backend", "DB prompt", "codex", nil, true, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT s.* FROM skills s JOIN agent_skills a ON a.skill_id=s.id WHERE a.agent_id=$1 ORDER BY s.name`)).
+		WithArgs("custom-backend").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "created_at", "updated_at"}).
+			AddRow("skill-1", "source-1", "backend-developer", "skills/backend-developer/SKILL.md", "", false, now, now))
 
 	handler := NewRouter(config.Config{APIToken: "test-token"}, store.New(sqlx.NewDb(rawDB, "sqlmock"), nil), nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/orchestrator-map", nil)
@@ -110,7 +192,9 @@ func TestOrchestratorMapRoute(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"recommended_agents":["backend","em"]`) {
+	if !strings.Contains(rec.Body.String(), `"recommended_agents":["backend","em"]`) ||
+		!strings.Contains(rec.Body.String(), `"id":"custom-backend"`) ||
+		!strings.Contains(rec.Body.String(), `"base_prompt":"DB prompt"`) {
 		t.Fatalf("unexpected response: %s", rec.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
