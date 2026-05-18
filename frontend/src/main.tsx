@@ -58,7 +58,7 @@ import {
   updateProject
 } from "./lib/api";
 
-type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent" | "skills" | "map";
+type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent-new" | "agent" | "skills" | "map";
 
 type RouteState = {
   route: Route;
@@ -76,6 +76,7 @@ function routeFromPath(pathname = window.location.pathname): RouteState {
   if (parts[0] === "bootstrap") return { route: "bootstrap", projectId: null, agentId: null };
   if (parts[0] === "projects" && parts[1] && parts[2] === "board") return { route: "board", projectId: parts[1], agentId: null };
   if (parts[0] === "projects" && parts[1]) return { route: "project", projectId: parts[1], agentId: null };
+  if (parts[0] === "agents" && parts[1] === "new") return { route: "agent-new", projectId: null, agentId: null };
   if (parts[0] === "agents" && parts[1]) return { route: "agent", projectId: null, agentId: parts[1] };
   if (parts[0] === "agents") return { route: "agents", projectId: null, agentId: null };
   if (parts[0] === "skills") return { route: "skills", projectId: null, agentId: null };
@@ -89,6 +90,7 @@ function pathForRoute(next: Route, id?: string) {
     case "project": return id ? `/projects/${encodeURIComponent(id)}` : "/projects";
     case "board": return id ? `/projects/${encodeURIComponent(id)}/board` : "/projects";
     case "agents": return "/agents";
+    case "agent-new": return "/agents/new";
     case "agent": return id ? `/agents/${encodeURIComponent(id)}` : "/agents";
     case "skills": return "/skills";
     case "map": return "/map";
@@ -208,7 +210,7 @@ function App() {
         <div className="brand"><Boxes size={22} /> mini-Paperclip</div>
         {showBootstrapNav && <button className={route === "bootstrap" ? "active" : ""} onClick={() => navigate("bootstrap")}>Bootstrap</button>}
         <button className={route === "projects" || route === "project" || route === "board" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
-        <button className={route === "agents" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
+        <button className={route === "agents" || route === "agent-new" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
         <button className={route === "map" ? "active" : ""} onClick={() => navigate("map")}><GitBranch size={16} /> Map</button>
         <div className="sidebar-footer">
@@ -221,7 +223,8 @@ function App() {
         {route === "projects" && <ProjectsPage openProject={(id) => navigate("project", id)} openBoard={(id) => navigate("board", id)} />}
         {route === "project" && projectId && <ProjectPage id={projectId} onOpenBoard={() => navigate("board", projectId)} onDeleted={() => navigate("projects")} />}
         {route === "board" && projectId && <BoardPage id={projectId} />}
-        {route === "agents" && <AgentsPage openAgent={(id) => navigate("agent", id)} />}
+        {route === "agents" && <AgentsPage openAgent={(id) => navigate("agent", id)} openAddAgent={() => navigate("agent-new")} />}
+        {route === "agent-new" && <AgentCreatePage onCreated={(id) => navigate("agent", id)} onCancel={() => navigate("agents")} />}
         {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} />}
         {route === "skills" && <SkillSourcesPage />}
         {route === "map" && <MapPage />}
@@ -757,16 +760,35 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   </div>;
 }
 
-function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
+function recommendationNamesForAgent(map: OrchestratorMap | null, agentId: string) {
+  return new Set(map?.agents.find((item) => item.id === agentId)?.recommended_skills || []);
+}
+
+function SkillCheckboxes({
+  skills,
+  selectedSkillIds,
+  recommendedSkillNames,
+  onToggle,
+}: {
+  skills: Skill[];
+  selectedSkillIds: string[];
+  recommendedSkillNames: Set<string>;
+  onToggle: (skill: Skill, checked: boolean) => void;
+}) {
+  const selected = new Set(selectedSkillIds);
+  return <div className="skill-picker">{skills.map((skill) => {
+    const recommended = recommendedSkillNames.has(skill.name);
+    return <label key={skill.id} className={recommended ? "recommended-skill" : undefined}>
+      <input type="checkbox" checked={selected.has(skill.id)} onChange={(e) => onToggle(skill, e.target.checked)} />
+      <span>{skill.name}</span>
+      {recommended && <em>Recommended</em>}
+    </label>;
+  })}</div>;
+}
+
+function AgentsPage({ openAgent, openAddAgent }: { openAgent: (id: string) => void; openAddAgent: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [map, setMap] = useState<OrchestratorMap | null>(null);
-  const [form, setForm] = useState({
-    id: "",
-    name: "",
-    role: "",
-    role_prompt: "",
-    cli_kind: "codex" as Agent["cli_kind"],
-  });
   const [error, setError] = useState("");
   async function refresh() {
     const [nextAgents, nextMap] = await Promise.all([listAgents(), getOrchestratorMap()]);
@@ -778,31 +800,9 @@ function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
   }, []);
 
   return <Panel title="Agents">
-    <form className="editor" onSubmit={async (e) => {
-      e.preventDefault();
-      setError("");
-      try {
-        const created = await createAgent({ ...form, enabled: true, skill_ids: [] });
-        setForm({ id: "", name: "", role: "", role_prompt: "", cli_kind: "codex" });
-        await refresh();
-        openAgent(created.id);
-      } catch (err) {
-        setError((err as Error).message);
-      }
-    }}>
-      <h2 className="section-title">Create Agent</h2>
-      <div className="form-grid">
-        <input value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} placeholder="Optional stable ID" />
-        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" required />
-        <input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} placeholder="Role" required />
-        <select value={form.cli_kind} onChange={(e) => setForm({ ...form, cli_kind: e.target.value as Agent["cli_kind"] })}>
-          <option value="codex">codex</option>
-          <option value="claude">claude</option>
-        </select>
-      </div>
-      <textarea value={form.role_prompt} onChange={(e) => setForm({ ...form, role_prompt: e.target.value })} placeholder="System prompt" required />
-      <button><Plus size={16} /> Create agent</button>
-    </form>
+    <div className="toolbar page-actions">
+      <button type="button" onClick={openAddAgent}><Plus size={16} /> Add Agent</button>
+    </div>
     <div className="list">
       {agents.map((agent) => {
         const mapAgent = map?.agents.find((item) => item.id === agent.id);
@@ -817,6 +817,82 @@ function AgentsPage({ openAgent }: { openAgent: (id: string) => void }) {
       </article>;
       })}
     </div>
+    <Error text={error} />
+  </Panel>;
+}
+
+function AgentCreatePage({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [map, setMap] = useState<OrchestratorMap | null>(null);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
+  const [skillsTouched, setSkillsTouched] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({
+    id: "",
+    name: "",
+    role: "",
+    role_prompt: "",
+    cli_kind: "codex" as Agent["cli_kind"],
+  });
+
+  useEffect(() => {
+    Promise.all([listInstalledSkills(), getOrchestratorMap()])
+      .then(([nextSkills, nextMap]) => {
+        setSkills(nextSkills);
+        setMap(nextMap);
+      })
+      .catch((e) => setError(e.message));
+  }, []);
+
+  const recommendedSkillNames = useMemo(() => recommendationNamesForAgent(map, form.id), [map, form.id]);
+
+  useEffect(() => {
+    if (skillsTouched) return;
+    setSelectedSkillIds(skills.filter((skill) => recommendedSkillNames.has(skill.name)).map((skill) => skill.id));
+  }, [recommendedSkillNames, skills, skillsTouched]);
+
+  function toggleSkill(skill: Skill, checked: boolean) {
+    setSkillsTouched(true);
+    setSelectedSkillIds((current) => checked
+      ? [...current.filter((id) => id !== skill.id), skill.id]
+      : current.filter((id) => id !== skill.id));
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const created = await createAgent({ ...form, enabled: true, skill_ids: selectedSkillIds });
+      onCreated(created.id);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Panel title="Add Agent">
+    <form className="editor" onSubmit={submit}>
+      <h2 className="section-title">Agent</h2>
+      <div className="form-grid">
+        <input value={form.id} onChange={(e) => setForm({ ...form, id: e.target.value })} placeholder="Optional stable ID" />
+        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" required />
+        <input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} placeholder="Role" required />
+        <select value={form.cli_kind} onChange={(e) => setForm({ ...form, cli_kind: e.target.value as Agent["cli_kind"] })}>
+          <option value="codex">codex</option>
+          <option value="claude">claude</option>
+        </select>
+      </div>
+      <textarea value={form.role_prompt} onChange={(e) => setForm({ ...form, role_prompt: e.target.value })} placeholder="System prompt" required />
+      <h2 className="section-title">Skills</h2>
+      <SkillCheckboxes skills={skills} selectedSkillIds={selectedSkillIds} recommendedSkillNames={recommendedSkillNames} onToggle={toggleSkill} />
+      <div className="toolbar">
+        <button disabled={busy}><Plus size={16} /> Create agent</button>
+        <button type="button" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
     <Error text={error} />
   </Panel>;
 }
@@ -839,7 +915,7 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
   }, [id]);
 
   if (!agent) return <Panel title="Agent"><Error text={error || "Loading..."} /></Panel>;
-  const mapAgent = map?.agents.find((item) => item.id === agent.id);
+  const recommendedSkillNames = recommendationNamesForAgent(map, agent.id);
 
   async function save() {
     const current = agent;
@@ -881,14 +957,12 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
       <h2 className="section-title">System Prompt</h2>
       <textarea value={agent.role_prompt} onChange={(e) => setAgent({ ...agent, role_prompt: e.target.value })} />
       <h2 className="section-title">Skills</h2>
-      <div className="skill-picker">{skills.map((skill) => {
-        const checked = Boolean((agent.skills || []).find((item) => item.id === skill.id));
-        return <label key={skill.id}><input type="checkbox" checked={checked} onChange={(e) => toggleSkill(skill, e.target.checked)} /> <span>{skill.name}</span></label>;
-      })}</div>
-      {mapAgent && <>
-        <h2 className="section-title">Dynamic Recommendations</h2>
-        <div className="skill-picker">{mapAgent.recommended_skills.map((skill) => <label key={skill}><input type="checkbox" checked readOnly /> <span>{skill}</span></label>)}</div>
-      </>}
+      <SkillCheckboxes
+        skills={skills}
+        selectedSkillIds={(agent.skills || []).map((skill) => skill.id)}
+        recommendedSkillNames={recommendedSkillNames}
+        onToggle={toggleSkill}
+      />
       {agent.definition_hash && <p className="empty-state">Definition hash: {agent.definition_hash}</p>}
       <div className="toolbar">
         <button onClick={save} disabled={busy}><Save size={16} /> Save</button>

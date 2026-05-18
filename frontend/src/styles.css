@@ -420,9 +420,22 @@ article.clickable:hover { background: var(--bg-hover); }
 }
 .skill-picker label:hover { border-color: var(--border-strong); color: var(--text); }
 .skill-picker input { width: auto; min-height: 0; padding: 0; background: transparent; border: 0; accent-color: var(--accent); }
+.skill-picker label.recommended-skill {
+  border-color: var(--border-strong);
+  background: var(--bg-active);
+}
+.skill-picker em {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
 
 .toolbar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .toolbar input { width: 180px; }
+.page-actions { margin: 0 0 12px; }
 
 .error {
   color: var(--danger-text);
