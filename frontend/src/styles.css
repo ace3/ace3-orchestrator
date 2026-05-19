@@ -1341,6 +1341,15 @@ tbody tr:hover { background: var(--bg-hover); }
   margin-bottom: 14px;
 }
 .drawer-header h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+.drawer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.share-fallback {
+  margin: -4px 0 14px;
+}
 
 .drawer-summary {
   padding: 0 0 16px;
