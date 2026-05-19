@@ -116,4 +116,4 @@ BASE_URL=http://127.0.0.1:18081 API_TOKEN=dev-token SOURCE=ace3 SHA=<commit-sha>
 
 ## REST API
 
-See `docs/rest-api.md` for task, artifact, run, heartbeat, and error contracts. Task artifacts are the durable context channel for PM documents, handoffs, engineering plans, QA reports, implementation notes, and run logs.
+See `docs/rest-api.md` for task, artifact, run, heartbeat, and error contracts. Task artifacts are the durable context channel for PM documents, handoffs, engineering plans, QA reports, implementation notes, and run logs. Child task prompts inherit parent artifacts, so PM/EM handoffs stay on the parent task and subtasks are reserved for independently executable work.

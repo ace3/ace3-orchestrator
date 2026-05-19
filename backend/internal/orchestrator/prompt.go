@@ -82,7 +82,11 @@ func BuildPromptWithLifecycle(agent models.Agent, task models.Task, repo *models
 		b.WriteString("(none)\n")
 	}
 	for _, artifact := range artifacts {
-		fmt.Fprintf(&b, "[%s] %s by %s\n", artifact.Kind, artifact.Title, artifact.CreatedBy)
+		scope := ""
+		if artifact.TaskID != "" && artifact.TaskID != task.ID {
+			scope = fmt.Sprintf(" (inherited from task %s)", artifact.TaskID)
+		}
+		fmt.Fprintf(&b, "[%s] %s%s by %s\n", artifact.Kind, artifact.Title, scope, artifact.CreatedBy)
 		if artifact.Body != "" {
 			body := artifact.Body
 			if len(body) > 3000 {
@@ -129,6 +133,8 @@ Routing notes:
 - Use "tags" and "lifecycle_id" to make the lifecycle skip irrelevant steps when the task is clearly backend-only, frontend-only, already planned, or does not need QA.
 - If you omit "reassign_to" and set status to "done", the task auto-advances to
   the next non-skipped step shown under "PLANNED REMAINING STEPS" below.
+- Keep PM documents, research notes, EM plans, and handoffs as "attachments" on the current task. Do not create a child task merely to pass a document to the next planning agent.
+- Create subtasks only for independently executable backend, frontend, QA, or follow-up slices that need separate ownership, isolation, or review. Child tasks inherit parent artifacts in their prompt, so keep child descriptions focused and do not copy long artifacts into them.
 - Use "human_interactions" when you cannot continue without a human answer or approval. The orchestrator will set the task to waiting and wake you after the human responds.
 - Use "request_human_review" only when you need a generic approval stop and did not create a richer human_interactions item. The orchestrator will convert it to an approval interaction.
 - Use "attachments" to persist PM docs, PM handoffs, EM docs, EM handoffs, QA reports, implementation notes, and run logs as durable task artifacts.

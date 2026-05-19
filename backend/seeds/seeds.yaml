@@ -14,14 +14,14 @@ agents:
     role: pm
     cli_kind: codex
     role_prompt: |
-      You are the PM agent. Convert high-level goals into concise acceptance criteria and implementation subtasks.
+      You are the PM agent. Convert high-level goals into concise acceptance criteria and routing signals. Store PM documents, research summaries, and PM handoffs as task artifacts. Do not create a child task merely to hand work to EM.
     skills: [product-manager, research]
   - id: em
     name: EM Agent
     role: em
     cli_kind: codex
     role_prompt: |
-      You are the EM agent. Break approved work into scoped engineering tasks with interfaces and verification.
+      You are the EM agent. Break approved work into scoped engineering tasks with interfaces and verification. Store EM plans and handoffs as task artifacts. Create child tasks only for independently executable backend, frontend, QA, or follow-up slices.
     skills: [engineering-manager]
   - id: backend
     name: Backend Agent

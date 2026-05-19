@@ -252,6 +252,45 @@ func TestCreateTaskArtifactPersistsStructuredContext(t *testing.T) {
 	}
 }
 
+func TestListTaskArtifactsForContextIncludesParentArtifacts(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	query := `WITH RECURSIVE ancestors AS (
+			SELECT id, parent_id, 0 AS depth FROM tasks WHERE id=$1
+			UNION ALL
+			SELECT t.id, t.parent_id, ancestors.depth+1 FROM tasks t JOIN ancestors ON ancestors.parent_id=t.id
+		)
+		SELECT a.* FROM task_artifacts a
+		JOIN ancestors ON ancestors.id=a.task_id
+		ORDER BY ancestors.depth ASC, a.updated_at DESC, a.created_at DESC
+		LIMIT $2`
+	mock.ExpectQuery(regexp.QuoteMeta(query)).
+		WithArgs("child-task", 10).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "task_id", "kind", "title", "body", "format", "metadata", "created_by", "run_id", "created_at", "updated_at"}).
+			AddRow("artifact-child", "child-task", "implementation_note", "Local note", "child body", "markdown", []byte(`{}`), "agent:backend", nil, now, now).
+			AddRow("artifact-parent", "parent-task", "em_handoff", "EM plan", "parent body", "markdown", []byte(`{}`), "agent:em", nil, now, now))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	artifacts, err := store.ListTaskArtifactsForContext(context.Background(), "child-task", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 2 {
+		t.Fatalf("got %d artifacts, want 2", len(artifacts))
+	}
+	if artifacts[0].TaskID != "child-task" || artifacts[1].TaskID != "parent-task" {
+		t.Fatalf("unexpected artifact order/context: %+v", artifacts)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeleteTaskArtifactRejectsRunCreatedArtifacts(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {

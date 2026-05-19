@@ -124,6 +124,19 @@ func TestBuildPromptIncludesTaskArtifacts(t *testing.T) {
 	}
 }
 
+func TestBuildPromptLabelsInheritedTaskArtifacts(t *testing.T) {
+	prompt := BuildPrompt(
+		models.Agent{ID: "backend", Name: "Backend Agent", Role: "backend"},
+		models.Task{ID: "child-task", Title: "Build API", Status: "todo"},
+		nil,
+		nil,
+		[]models.TaskArtifact{{TaskID: "parent-task", Kind: "em_handoff", Title: "Plan", Body: "Use the parent plan", CreatedBy: "agent:em"}},
+	)
+	if !strings.Contains(prompt, "[em_handoff] Plan (inherited from task parent-task) by agent:em") || !strings.Contains(prompt, "Use the parent plan") {
+		t.Fatalf("prompt did not label inherited artifact context:\n%s", prompt)
+	}
+}
+
 func TestBuildPromptIncludesActiveSkillInstructions(t *testing.T) {
 	prompt := BuildPromptWithSkillDocs(
 		models.Agent{

@@ -172,6 +172,22 @@ func (s *Store) ListTaskArtifacts(ctx context.Context, taskID string) ([]models.
 	return artifacts, s.db.SelectContext(ctx, &artifacts, "SELECT * FROM task_artifacts WHERE task_id=$1 ORDER BY updated_at DESC, created_at DESC", taskID)
 }
 
+func (s *Store) ListTaskArtifactsForContext(ctx context.Context, taskID string, limit int) ([]models.TaskArtifact, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	artifacts := []models.TaskArtifact{}
+	return artifacts, s.db.SelectContext(ctx, &artifacts, `WITH RECURSIVE ancestors AS (
+			SELECT id, parent_id, 0 AS depth FROM tasks WHERE id=$1
+			UNION ALL
+			SELECT t.id, t.parent_id, ancestors.depth+1 FROM tasks t JOIN ancestors ON ancestors.parent_id=t.id
+		)
+		SELECT a.* FROM task_artifacts a
+		JOIN ancestors ON ancestors.id=a.task_id
+		ORDER BY ancestors.depth ASC, a.updated_at DESC, a.created_at DESC
+		LIMIT $2`, taskID, limit)
+}
+
 func (s *Store) GetTaskArtifact(ctx context.Context, id string) (models.TaskArtifact, error) {
 	var artifact models.TaskArtifact
 	if err := s.db.GetContext(ctx, &artifact, "SELECT * FROM task_artifacts WHERE id=$1", id); err != nil {
@@ -508,12 +524,9 @@ func (s *Store) TaskContext(ctx context.Context, run models.Run) (models.Agent, 
 	if len(comments) > 10 {
 		comments = comments[len(comments)-10:]
 	}
-	artifacts, err := s.ListTaskArtifacts(ctx, task.ID)
+	artifacts, err := s.ListTaskArtifactsForContext(ctx, task.ID, 10)
 	if err != nil {
 		return agent, task, repo, comments, nil, err
-	}
-	if len(artifacts) > 10 {
-		artifacts = artifacts[:10]
 	}
 	return agent, task, repo, comments, artifacts, nil
 }

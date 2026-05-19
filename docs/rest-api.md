@@ -60,6 +60,13 @@ the parent task title so child tasks keep the original request context. QA runs
 that finish with `status = "done"` are terminal for that branch and cannot spawn
 new children.
 
+Artifacts are the handoff channel. PM, research, and EM agents should store
+documents and handoffs as artifacts on the current task, then let lifecycle
+advancement wake the next planning agent. Create subtasks only for independently
+executable backend, frontend, QA, or follow-up slices that need separate
+ownership, isolation, or review. Child task prompts include parent artifacts, so
+child descriptions should stay focused instead of duplicating long handoff text.
+
 Create a wakeup:
 
 ```http
