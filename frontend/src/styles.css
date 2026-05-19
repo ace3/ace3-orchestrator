@@ -1698,6 +1698,89 @@ pre {
   flex-shrink: 0;
 }
 
+/* Side-by-side skills layout (desktop only when skill selected) */
+.skills-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.skills-layout.has-selection {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+}
+.skills-list-pane { min-width: 0; }
+
+.skills-detail-pane {
+  position: sticky;
+  top: 12px;
+  display: grid;
+  gap: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px 14px;
+  max-height: calc(100vh - 60px);
+  overflow: auto;
+}
+.detail-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.detail-pane-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.detail-pane-head strong {
+  font-size: 13.5px;
+  color: var(--text);
+  font-weight: 600;
+}
+.detail-pane-sub {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.detail-pane-close {
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--text-dim) !important;
+  font-size: 18px !important;
+  line-height: 1 !important;
+  min-height: 0 !important;
+  width: 26px !important;
+  height: 26px !important;
+  padding: 0 !important;
+  border-radius: 4px !important;
+  flex-shrink: 0;
+}
+.detail-pane-close:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text) !important;
+}
+.detail-pane-tree {
+  max-height: 240px;
+  overflow: auto;
+  padding: 4px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-board);
+}
+.detail-pane-preview { display: grid; gap: 6px; min-width: 0; }
+.detail-pane-preview pre {
+  max-height: none;
+  min-height: 220px;
+}
+
+@media (max-width: 980px) {
+  .skills-layout.has-selection { grid-template-columns: minmax(0, 1fr); }
+  .skills-detail-pane { position: static; max-height: none; }
+  .detail-pane-tree { max-height: 200px; }
+}
+
 /* Pin modal warning */
 .modal-warning {
   margin: 0;

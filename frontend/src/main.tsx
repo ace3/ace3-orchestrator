@@ -1834,6 +1834,8 @@ function SkillSourcesPage() {
       </div>
     </div>
 
+    <div className={`skills-layout ${selectedSkill ? "has-selection" : ""}`}>
+    <div className="skills-list-pane">
     {totalSkills === 0 ? (
       <p className="empty-state">No installed skills yet. Sync a source to discover its skills.</p>
     ) : filteredSkills.length === 0 ? (
@@ -1923,23 +1925,33 @@ function SkillSourcesPage() {
       </div>
     )}
 
+    </div>
     {selectedSkill && (
-      <>
-        <h2 className="section-title">Browse — {selectedSkill.name}</h2>
-        <div className="browser-grid">
-          <div className="tree-pane">
-            {tree ? <SkillTree node={tree} onOpen={openFile} /> : <p className="empty-state">Loading tree…</p>}
+      <aside className="skills-detail-pane">
+        <header className="detail-pane-head">
+          <div>
+            <strong>{selectedSkill.name}</strong>
+            <span className="detail-pane-sub">{sourceNames[selectedSkill.source_id] || selectedSkill.source_id}</span>
           </div>
-          <div className="preview-pane">
-            <div className="artifact-head">
-              <strong>{content?.path || "SKILL.md"}</strong>
-              <span>{sourceNames[selectedSkill.source_id] || selectedSkill.source_id}</span>
-            </div>
-            <pre>{content?.content || "No preview available."}</pre>
-          </div>
+          <button
+            type="button"
+            className="detail-pane-close"
+            aria-label="Close skill viewer"
+            onClick={() => { setSelectedSkill(null); setTree(null); setContent(null); }}
+          >×</button>
+        </header>
+        <div className="detail-pane-tree">
+          {tree ? <SkillTree node={tree} onOpen={openFile} /> : <p className="empty-state">Loading tree…</p>}
         </div>
-      </>
+        <div className="detail-pane-preview">
+          <div className="artifact-head">
+            <strong>{content?.path || "SKILL.md"}</strong>
+          </div>
+          <pre>{content?.content || "No preview available."}</pre>
+        </div>
+      </aside>
     )}
+    </div>
 
     <SourceFormModal open={addOpen} onClose={() => setAddOpen(false)} onSubmit={handleAdd} />
     <PinModal
