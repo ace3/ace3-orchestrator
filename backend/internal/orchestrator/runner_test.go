@@ -2,9 +2,11 @@ package orchestrator
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
+	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/store"
 )
@@ -74,6 +76,31 @@ func TestMockRunnerInvalidJSONSmoke(t *testing.T) {
 	}
 	if result.Stdout == "" {
 		t.Fatal("expected invalid stdout")
+	}
+}
+
+func TestPrepareWorktreeSupportsUnbornRepo(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreesDir := t.TempDir()
+	if out, err := exec.Command("git", "-C", repoPath, "init", "-b", "main").CombinedOutput(); err != nil {
+		t.Fatalf("init repo: %v: %s", err, out)
+	}
+
+	orch := &Orchestrator{cfg: config.Config{WorktreesDir: worktreesDir}}
+	worktree, cleanup, err := orch.prepareWorktree(context.Background(), "run-1", &models.Repo{
+		LocalPath:     repoPath,
+		DefaultBranch: "main",
+	})
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "-C", worktree, "status", "--short", "--branch").CombinedOutput()
+	if err != nil {
+		t.Fatalf("worktree status: %v: %s", err, out)
+	}
+	if !strings.Contains(string(out), "No commits yet on mp-run-run1") {
+		t.Fatalf("unexpected worktree status:\n%s", out)
 	}
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,12 +24,18 @@ type API struct {
 	orch      *orchestrator.Orchestrator
 }
 
+type debugHealthResponse struct {
+	Status    string `json:"status"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *orchestrator.Orchestrator) http.Handler {
 	api := &API{cfg: cfg, store: st, bootstrap: bs, orch: orch}
 	r := chi.NewRouter()
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	r.Get("/api/debug/health", debugHealth)
 	r.Route("/api", func(r chi.Router) {
 		r.Use(auth.Bearer(cfg.APIToken))
 		r.Get("/bootstrap-status", api.bootstrapStatus)
@@ -88,6 +95,13 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Get("/events", api.events)
 	})
 	return r
+}
+
+func debugHealth(w http.ResponseWriter, r *http.Request) {
+	httpx.JSON(w, http.StatusOK, debugHealthResponse{
+		Status:    "ok",
+		Timestamp: time.Now().UnixMilli(),
+	})
 }
 
 func (a *API) bootstrapStatus(w http.ResponseWriter, r *http.Request) {

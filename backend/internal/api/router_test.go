@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -14,6 +15,39 @@ import (
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/store"
 )
+
+func TestDebugHealthRouteIsPublic(t *testing.T) {
+	handler := NewRouter(config.Config{APIToken: "test-token"}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/debug/health", nil)
+	rec := httptest.NewRecorder()
+	before := time.Now().UnixMilli()
+	handler.ServeHTTP(rec, req)
+	after := time.Now().UnixMilli()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body) != 2 {
+		t.Fatalf("got keys %v, want status and timestamp", body)
+	}
+	status, ok := body["status"].(string)
+	if !ok || status != "ok" {
+		t.Fatalf("got status %v, want ok", body["status"])
+	}
+	timestamp, ok := body["timestamp"].(float64)
+	if !ok {
+		t.Fatalf("got timestamp %v, want numeric unix milliseconds", body["timestamp"])
+	}
+	timestampMS := int64(timestamp)
+	if timestamp != float64(timestampMS) || timestampMS < before || timestampMS > after {
+		t.Fatalf("timestamp %v outside request window [%d,%d]", body["timestamp"], before, after)
+	}
+}
 
 func TestAgentPromptImproveIsBlocked(t *testing.T) {
 	handler := NewRouter(config.Config{APIToken: "test-token"}, nil, nil, nil)

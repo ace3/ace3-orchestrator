@@ -187,7 +187,11 @@ func (s *Store) ClaimQueuedWakeup(ctx context.Context) (models.Run, bool, error)
 		return models.Run{}, false, err
 	}
 	var wakeup models.AgentWakeup
-	err = tx.GetContext(ctx, &wakeup, `SELECT * FROM agent_wakeups WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`)
+	err = tx.GetContext(ctx, &wakeup, `SELECT * FROM agent_wakeups
+		WHERE status='queued'
+		ORDER BY CASE WHEN source='manual' THEN 0 ELSE 1 END, created_at
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1`)
 	if err != nil {
 		_ = tx.Rollback()
 		if errors.Is(err, sql.ErrNoRows) {

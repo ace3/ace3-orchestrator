@@ -370,7 +370,11 @@ func TestClaimQueuedWakeupCreatesExactlyOneLinkedRun(t *testing.T) {
 
 	now := time.Now()
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM agent_wakeups WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM agent_wakeups
+		WHERE status='queued'
+		ORDER BY CASE WHEN source='manual' THEN 0 ELSE 1 END, created_at
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1`)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "agent_id", "task_id", "source", "reason", "payload_json", "context_snapshot", "requester_type", "status", "coalesced_count", "error", "created_at", "updated_at"}).
 			AddRow("wake-1", "agent-1", "task-1", "manual", "manual_run", []byte(`{}`), []byte(`{}`), "api", "queued", 0, "", now, now))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT p.default_cli_kind

@@ -305,7 +305,12 @@ func (o *Orchestrator) prepareWorktree(ctx context.Context, runID string, repo *
 	if err := os.MkdirAll(o.cfg.WorktreesDir, 0o755); err != nil {
 		return "", func() {}, err
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", repo.LocalPath, "worktree", "add", "--detach", target, repo.DefaultBranch)
+	args := []string{"-C", repo.LocalPath, "worktree", "add", "--detach", target, repo.DefaultBranch}
+	if err := exec.CommandContext(ctx, "git", "-C", repo.LocalPath, "rev-parse", "--verify", "HEAD").Run(); err != nil {
+		branch := "mp-run-" + strings.ReplaceAll(runID, "-", "")
+		args = []string{"-C", repo.LocalPath, "worktree", "add", "--orphan", "-b", branch, target}
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", func() {}, fmt.Errorf("%w: %s", err, string(out))
