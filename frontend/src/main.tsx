@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
+import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, Github, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
@@ -42,6 +42,7 @@ import {
   getProject,
   getToken,
   heartbeat,
+  importGitHubSkill,
   listAgents,
   listComments,
   listInteractions,
@@ -61,6 +62,7 @@ import {
   setToken,
   syncSkillSource,
   updateAgent,
+  updateSkill,
   updateTaskArtifact,
   updateTask,
   updateProject
@@ -1530,6 +1532,57 @@ function SourceFormModal({ open, onClose, onSubmit }: {
   );
 }
 
+function GitHubSkillModal({ open, onClose, onSubmit }: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (values: { url: string; name?: string }) => Promise<void>;
+}) {
+  const [values, setValues] = useState({ url: "", name: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    setValues({ url: "", name: "" });
+    setBusy(false);
+    setErr("");
+  }, [open]);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!values.url.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onSubmit({ url: values.url.trim(), name: values.name.trim() || undefined });
+      onClose();
+    } catch (e2) {
+      setErr((e2 as Error).message);
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal open={open} onClose={busy ? () => undefined : onClose} title="Add GitHub skill" footer={
+      <>
+        <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="submit" form="github-skill-modal-form" disabled={busy || !values.url.trim()}>
+          <Github size={14} /> Add skill
+        </button>
+      </>
+    }>
+      <form id="github-skill-modal-form" className="task-modal-form" onSubmit={submit}>
+        {err && <Error text={err} />}
+        <label className="field">
+          <span className="field-label">GitHub skill URL</span>
+          <input autoFocus value={values.url} onChange={(e) => setValues({ ...values, url: e.target.value })} placeholder="https://github.com/org/repo/tree/main/skills/name" required />
+        </label>
+        <label className="field">
+          <span className="field-label">Source name</span>
+          <input value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} placeholder="optional" />
+        </label>
+      </form>
+    </Modal>
+  );
+}
+
 function PinModal({ open, source, onClose, onSubmit }: {
   open: boolean;
   source: SkillSource | null;
@@ -1631,12 +1684,13 @@ function SkillSourcesPage() {
   const [sort, setSort] = useState<SkillSort>("source");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [addOpen, setAddOpen] = useState(false);
+  const [githubOpen, setGithubOpen] = useState(false);
   const [pinTarget, setPinTarget] = useState<SkillSource | null>(null);
 
   async function refresh() {
     const [nextSources, nextSkills, nextAgents, nextMap] = await Promise.all([
       listSkillSources(),
-      listInstalledSkills(),
+      listInstalledSkills(true),
       listAgents().catch(() => [] as Agent[]),
       getOrchestratorMap().catch(() => null as OrchestratorMap | null),
     ]);
@@ -1734,6 +1788,21 @@ function SkillSourcesPage() {
     await createSkillSource(values);
     await refresh();
   }
+  async function handleImportGitHub(values: { url: string; name?: string }) {
+    await importGitHubSkill(values);
+    await refresh();
+  }
+  async function handleToggleIgnored(skill: Skill, ignored: boolean) {
+    setError("");
+    setBusy((prev) => ({ ...prev, [skill.id]: ignored ? "ignoring" : "enabling" }));
+    try {
+      const next = await updateSkill(skill.id, { ignored });
+      setSkills((prev) => prev.map((item) => item.id === next.id ? next : item));
+      if (selectedSkill?.id === next.id) setSelectedSkill(next);
+      await refresh();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy((prev) => { const { [skill.id]: _, ...rest } = prev; return rest; }); }
+  }
   async function handleSync(source: SkillSource) {
     setError("");
     setBusy((prev) => ({ ...prev, [source.id]: "syncing" }));
@@ -1759,6 +1828,7 @@ function SkillSourcesPage() {
   }
 
   const totalSkills = skills.length;
+  const ignoredSkills = skills.filter((skill) => skill.ignored).length;
   const totalAgents = agentList.length;
   const recommendedCount = recommendedByMap.size;
 
@@ -1769,10 +1839,12 @@ function SkillSourcesPage() {
       <div className="source-stats">
         <span><strong>{sources.length}</strong> source{sources.length === 1 ? "" : "s"}</span>
         <span><strong>{totalSkills}</strong> skill{totalSkills === 1 ? "" : "s"}</span>
+        {ignoredSkills > 0 && <span><strong>{ignoredSkills}</strong> ignored</span>}
         <span><strong>{totalAgents}</strong> agent{totalAgents === 1 ? "" : "s"}</span>
         {recommendedCount > 0 && <span><strong>{recommendedCount}</strong> recommended</span>}
       </div>
       <div className="board-toolbar-actions">
+        <button type="button" onClick={() => setGithubOpen(true)}><Github size={16} /> Add GitHub skill</button>
         <button type="button" className="primary-button" onClick={() => setAddOpen(true)}><Plus size={16} /> Add source</button>
       </div>
     </div>
@@ -1808,6 +1880,7 @@ function SkillSourcesPage() {
               <div className="source-meta">
                 <span>pinned <code>{source.pinned_sha}</code></span>
                 <span>{skillCount} skill{skillCount === 1 ? "" : "s"}</span>
+                {source.path_filter && <span>filter <code>{source.path_filter}</code></span>}
                 <span title={source.last_synced_at || "never synced"}>synced {relativeTime(source.last_synced_at)}</span>
               </div>
             </article>
@@ -1866,18 +1939,26 @@ function SkillSourcesPage() {
                     const users = usedByMap.get(skill.id) || [];
                     const recommended = recommendedByMap.get(skill.id) || [];
                     return (
-                      <button
-                        type="button"
-                        key={skill.id}
-                        className={`skill-row ${selectedSkill?.id === skill.id ? "active" : ""}`}
-                        onClick={() => openSkill(skill)}
-                      >
+	                      <div
+	                        role="button"
+	                        tabIndex={0}
+	                        key={skill.id}
+	                        className={`skill-row ${selectedSkill?.id === skill.id ? "active" : ""}`}
+	                        onClick={() => openSkill(skill)}
+	                        onKeyDown={(e) => {
+	                          if (e.key === "Enter" || e.key === " ") {
+	                            e.preventDefault();
+	                            openSkill(skill);
+	                          }
+	                        }}
+	                      >
                         <div className="skill-row-main">
                           <span className="skill-row-name">{skill.name}</span>
                           <span className="skill-row-path">{skill.path_in_source}</span>
                         </div>
                         <div className="skill-row-meta">
                           {skill.version && <span className="badge badge-version">{skill.version}</span>}
+                          {skill.ignored && <span className="badge badge-ignored">ignored</span>}
                           {users.length > 0 && (
                             <span className="badge badge-agents" title={users.map((a) => a.name).join(", ")}>
                               {users.length} agent{users.length === 1 ? "" : "s"}
@@ -1888,8 +1969,23 @@ function SkillSourcesPage() {
                               recommended × {recommended.length}
                             </span>
                           )}
+                          <span
+                            className="skill-inline-action"
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => { e.stopPropagation(); handleToggleIgnored(skill, !skill.ignored); }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleToggleIgnored(skill, !skill.ignored);
+                              }
+                            }}
+                          >
+                            {busy[skill.id] ? busy[skill.id] : skill.ignored ? "Enable" : "Ignore"}
+                          </span>
                         </div>
-                      </button>
+	                      </div>
                     );
                   })}
                 </div>
@@ -1904,22 +2000,45 @@ function SkillSourcesPage() {
           const users = usedByMap.get(skill.id) || [];
           const recommended = recommendedByMap.get(skill.id) || [];
           return (
-            <button
-              type="button"
-              key={skill.id}
-              className={`skill-row ${selectedSkill?.id === skill.id ? "active" : ""}`}
-              onClick={() => openSkill(skill)}
-            >
+	            <div
+	              role="button"
+	              tabIndex={0}
+	              key={skill.id}
+	              className={`skill-row ${selectedSkill?.id === skill.id ? "active" : ""}`}
+	              onClick={() => openSkill(skill)}
+	              onKeyDown={(e) => {
+	                if (e.key === "Enter" || e.key === " ") {
+	                  e.preventDefault();
+	                  openSkill(skill);
+	                }
+	              }}
+	            >
               <div className="skill-row-main">
                 <span className="skill-row-name">{skill.name}</span>
                 <span className="skill-row-path">{sourceNames[skill.source_id] || skill.source_id} · {skill.path_in_source}</span>
               </div>
               <div className="skill-row-meta">
                 {skill.version && <span className="badge badge-version">{skill.version}</span>}
+                {skill.ignored && <span className="badge badge-ignored">ignored</span>}
                 {users.length > 0 && <span className="badge badge-agents">{users.length} agent{users.length === 1 ? "" : "s"}</span>}
                 {recommended.length > 0 && <span className="badge badge-recommended">rec × {recommended.length}</span>}
+                <span
+                  className="skill-inline-action"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => { e.stopPropagation(); handleToggleIgnored(skill, !skill.ignored); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleToggleIgnored(skill, !skill.ignored);
+                    }
+                  }}
+                >
+                  {busy[skill.id] ? busy[skill.id] : skill.ignored ? "Enable" : "Ignore"}
+                </span>
               </div>
-            </button>
+	            </div>
           );
         })}
       </div>
@@ -1932,6 +2051,7 @@ function SkillSourcesPage() {
           <div>
             <strong>{selectedSkill.name}</strong>
             <span className="detail-pane-sub">{sourceNames[selectedSkill.source_id] || selectedSkill.source_id}</span>
+            {selectedSkill.ignored && <span className="badge badge-ignored">ignored</span>}
           </div>
           <button
             type="button"
@@ -1954,6 +2074,7 @@ function SkillSourcesPage() {
     </div>
 
     <SourceFormModal open={addOpen} onClose={() => setAddOpen(false)} onSubmit={handleAdd} />
+    <GitHubSkillModal open={githubOpen} onClose={() => setGithubOpen(false)} onSubmit={handleImportGitHub} />
     <PinModal
       open={!!pinTarget}
       source={pinTarget}

@@ -225,7 +225,7 @@ func (a *API) orchestratorMap(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
-	skills, err := a.store.ListInstalledSkills(r.Context())
+	skills, err := a.store.ListInstalledSkills(r.Context(), false)
 	if err != nil {
 		respond(w, nil, err)
 		return

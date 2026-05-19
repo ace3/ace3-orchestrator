@@ -233,7 +233,7 @@ func (s *Service) SyncSource(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	skills, err := discoverSkills(target, source.ID)
+	skills, err := discoverSkills(target, source.ID, source.PathFilter)
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,31 @@ func isPinnedSHA(value string) bool {
 	return true
 }
 
-func discoverSkills(root, sourceID string) ([]models.Skill, error) {
+func discoverSkills(root, sourceID, pathFilter string) ([]models.Skill, error) {
+	pathFilter = filepath.Clean(strings.TrimSpace(pathFilter))
+	if pathFilter != "" && pathFilter != "." {
+		if filepath.IsAbs(pathFilter) || pathFilter == ".." || strings.HasPrefix(pathFilter, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("invalid skill path filter %q", pathFilter)
+		}
+		if filepath.Base(pathFilter) != "SKILL.md" {
+			pathFilter = filepath.Join(pathFilter, "SKILL.md")
+		}
+		path := filepath.Join(root, pathFilter)
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("skill path filter %q is a directory", pathFilter)
+		}
+		return []models.Skill{{
+			ID:           uuid.NewString(),
+			SourceID:     sourceID,
+			Name:         filepath.Base(filepath.Dir(path)),
+			PathInSource: filepath.ToSlash(pathFilter),
+			Version:      "",
+		}}, nil
+	}
 	var skills []models.Skill
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {

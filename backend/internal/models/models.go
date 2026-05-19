@@ -27,6 +27,7 @@ type SkillSource struct {
 	Name         string     `db:"name" json:"name"`
 	UpstreamURL  string     `db:"upstream_url" json:"upstream_url"`
 	PinnedSHA    string     `db:"pinned_sha" json:"pinned_sha"`
+	PathFilter   string     `db:"path_filter" json:"path_filter"`
 	LastSyncedAt *time.Time `db:"last_synced_at" json:"last_synced_at"`
 	Kind         string     `db:"kind" json:"kind"`
 	HasUpdate    bool       `db:"has_update" json:"has_update"`
@@ -41,6 +42,7 @@ type Skill struct {
 	PathInSource string    `db:"path_in_source" json:"path_in_source"`
 	Version      string    `db:"version" json:"version"`
 	Archived     bool      `db:"archived" json:"archived"`
+	Ignored      bool      `db:"ignored" json:"ignored"`
 	CreatedAt    time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at" json:"updated_at"`
 }

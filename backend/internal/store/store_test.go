@@ -27,11 +27,11 @@ func TestListInstalledSkillsExcludesArchivedAndOrdersBySourceName(t *testing.T) 
 		AddRow("skill-1", "ace3", "backend-developer", "skills/backend-developer/SKILL.md", "", false, now, now).
 		AddRow("skill-2", "verzth", "qa-manager", "skills/qa-manager/SKILL.md", "", false, now, now)
 
-	query := `SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false ORDER BY ss.name, s.name`
+	query := `SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false AND s.ignored=false ORDER BY ss.name, s.name`
 	mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnRows(rows)
 
 	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
-	skills, err := store.ListInstalledSkills(context.Background())
+	skills, err := store.ListInstalledSkills(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +40,93 @@ func TestListInstalledSkillsExcludesArchivedAndOrdersBySourceName(t *testing.T) 
 	}
 	if skills[0].SourceID != "ace3" || skills[0].Name != "backend-developer" {
 		t.Fatalf("unexpected first skill: %+v", skills[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListInstalledSkillsCanIncludeIgnored(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "ignored", "created_at", "updated_at"}).
+		AddRow("skill-1", "ace3", "backend-developer", "skills/backend-developer/SKILL.md", "", false, false, now, now).
+		AddRow("skill-2", "ace3", "qa-manager", "skills/qa-manager/SKILL.md", "", false, true, now, now)
+
+	query := `SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false ORDER BY ss.name, s.name`
+	mock.ExpectQuery(regexp.QuoteMeta(query)).WillReturnRows(rows)
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	skills, err := store.ListInstalledSkills(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skills) != 2 || !skills[1].Ignored {
+		t.Fatalf("unexpected skills: %+v", skills)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetSkillIgnoredRejectsAssignedSkill(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT count(*) FROM agent_skills WHERE skill_id=$1")).
+		WithArgs("skill-1").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	err = func() error {
+		_, err := store.SetSkillIgnored(context.Background(), "skill-1", true)
+		return err
+	}()
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("got %v, want ErrConflict", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpsertSkillsForSourcePreservesIgnoredOnResync(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE skills SET archived=true, updated_at=now() WHERE source_id=$1")).
+		WithArgs("source-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO skills (id, source_id, name, path_in_source, version, archived, ignored)
+			VALUES ($1,$2,$3,$4,$5,false,false)
+			ON CONFLICT (source_id, path_in_source) DO UPDATE SET name=excluded.name, version=excluded.version, archived=false, updated_at=now()`)).
+		WithArgs("skill-1", "source-1", "qa-manager", "skills/qa-manager/SKILL.md", "").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE skill_sources SET last_synced_at=now(), updated_at=now() WHERE id=$1")).
+		WithArgs("source-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	if err := store.UpsertSkillsForSource(context.Background(), "source-1", []models.Skill{{
+		ID:           "skill-1",
+		SourceID:     "source-1",
+		Name:         "qa-manager",
+		PathInSource: "skills/qa-manager/SKILL.md",
+	}}); err != nil {
+		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

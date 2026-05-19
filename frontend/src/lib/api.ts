@@ -18,6 +18,7 @@ export type Skill = {
   path_in_source: string;
   version: string;
   archived: boolean;
+  ignored: boolean;
 };
 
 export type SkillTreeEntry = {
@@ -44,6 +45,7 @@ export type SkillSource = {
   name: string;
   upstream_url: string;
   pinned_sha: string;
+  path_filter: string;
   last_synced_at: string | null;
   kind: string;
   has_update: boolean;
@@ -297,12 +299,14 @@ export const rejectInteraction = (id: string) => api<TaskInteraction>(`/task-int
 export const getTaskLiveness = (taskId: string) => api<TaskLiveness>(`/tasks/${taskId}/liveness`);
 export const getActiveRun = (taskId: string) => api<Run | null>(`/tasks/${taskId}/active-run`);
 export const heartbeat = () => api<{ queued: number }>("/heartbeat", { method: "POST" });
-export const listInstalledSkills = () => api<Skill[]>("/skills");
+export const listInstalledSkills = (includeIgnored = false) => api<Skill[]>(`/skills${includeIgnored ? "?include_ignored=true" : ""}`);
 export const getSkillTree = (id: string) => api<SkillTreeResponse>(`/skills/${id}/tree`);
 export const getSkillContent = (id: string, path = "SKILL.md") => api<SkillContentResponse>(`/skills/${id}/content?path=${encodeURIComponent(path)}`);
 export const listSkillSources = () => api<SkillSource[]>("/skill-sources");
 export const createSkillSource = (body: Partial<SkillSource>) => api<SkillSource>("/skill-sources", { method: "POST", body: JSON.stringify(body) });
+export const importGitHubSkill = (body: { url: string; name?: string }) => api<SkillSource>("/skill-sources/import-github-skill", { method: "POST", body: JSON.stringify(body) });
 export const syncSkillSource = (id: string) => api<SkillSource>(`/skill-sources/${id}/sync`, { method: "POST" });
 export const pinSkillSource = (id: string, sha: string) => api<SkillSource>(`/skill-sources/${id}/pin`, { method: "POST", body: JSON.stringify({ sha }) });
 export const deleteSkillSource = (id: string) => api<{ deleted: boolean }>(`/skill-sources/${id}`, { method: "DELETE" });
+export const updateSkill = (id: string, body: Partial<Skill>) => api<Skill>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const getOrchestratorMap = () => api<OrchestratorMap>("/orchestrator-map");

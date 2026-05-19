@@ -38,3 +38,21 @@ func TestControlPlaneMigrationAddsWakeupsInteractionsAndLiveness(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillIgnoreImportMigrationAddsSelectionColumns(t *testing.T) {
+	body, err := migrationFiles.ReadFile("migrations/0006_skill_ignore_import.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	required := []string{
+		"ADD COLUMN IF NOT EXISTS path_filter TEXT NOT NULL DEFAULT ''",
+		"ADD COLUMN IF NOT EXISTS ignored BOOLEAN NOT NULL DEFAULT false",
+		"CREATE INDEX IF NOT EXISTS idx_skills_installable",
+	}
+	for _, item := range required {
+		if !strings.Contains(sql, item) {
+			t.Fatalf("skill ignore/import migration missing %q", item)
+		}
+	}
+}

@@ -85,8 +85,10 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Get("/skills", api.listInstalledSkills)
 		r.Get("/skills/{id}/tree", api.getSkillTree)
 		r.Get("/skills/{id}/content", api.getSkillContent)
+		r.Patch("/skills/{id}", api.updateSkill)
 		r.Get("/skill-sources", api.listSkillSources)
 		r.Post("/skill-sources", api.createSkillSource)
+		r.Post("/skill-sources/import-github-skill", api.importGitHubSkillSource)
 		r.Post("/skill-sources/{id}/sync", api.syncSkillSource)
 		r.Post("/skill-sources/{id}/pin", api.pinSkillSource)
 		r.Delete("/skill-sources/{id}", api.deleteSkillSource)
@@ -278,8 +280,21 @@ func (a *API) createSkillSource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listInstalledSkills(w http.ResponseWriter, r *http.Request) {
-	skills, err := a.store.ListInstalledSkills(r.Context())
+	includeIgnored := r.URL.Query().Get("include_ignored") == "true"
+	skills, err := a.store.ListInstalledSkills(r.Context(), includeIgnored)
 	respond(w, skills, err)
+}
+
+func (a *API) updateSkill(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Ignored bool `json:"ignored"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	skill, err := a.store.SetSkillIgnored(r.Context(), chi.URLParam(r, "id"), body.Ignored)
+	respond(w, skill, err)
 }
 
 func (a *API) syncSkillSource(w http.ResponseWriter, r *http.Request) {

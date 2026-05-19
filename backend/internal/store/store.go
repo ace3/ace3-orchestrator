@@ -277,7 +277,7 @@ func (s *Store) SkillsByID(ctx context.Context, ids []string) ([]models.Skill, e
 			continue
 		}
 		var skill models.Skill
-		if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE id=$1 AND archived=false", id); err != nil {
+		if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE id=$1 AND archived=false AND ignored=false", id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, ErrNotFound
 			}
@@ -296,7 +296,7 @@ func (s *Store) SkillsByName(ctx context.Context, names []string) ([]models.Skil
 			continue
 		}
 		var skill models.Skill
-		if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE name=$1 AND archived=false ORDER BY source_id, path_in_source LIMIT 1", name); err != nil {
+		if err := s.db.GetContext(ctx, &skill, "SELECT * FROM skills WHERE name=$1 AND archived=false AND ignored=false ORDER BY source_id, path_in_source LIMIT 1", name); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, fmt.Errorf("repo-defined skill %q is not installed", name)
 			}
@@ -327,9 +327,14 @@ func (s *Store) ListSkillSources(ctx context.Context) ([]models.SkillSource, err
 	return sources, s.db.SelectContext(ctx, &sources, "SELECT * FROM skill_sources ORDER BY name")
 }
 
-func (s *Store) ListInstalledSkills(ctx context.Context) ([]models.Skill, error) {
+func (s *Store) ListInstalledSkills(ctx context.Context, includeIgnored bool) ([]models.Skill, error) {
 	var skills []models.Skill
-	return skills, s.db.SelectContext(ctx, &skills, `SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false ORDER BY ss.name, s.name`)
+	query := `SELECT s.* FROM skills s JOIN skill_sources ss ON ss.id=s.source_id WHERE s.archived=false`
+	if !includeIgnored {
+		query += ` AND s.ignored=false`
+	}
+	query += ` ORDER BY ss.name, s.name`
+	return skills, s.db.SelectContext(ctx, &skills, query)
 }
 
 func (s *Store) GetSkill(ctx context.Context, id string) (models.Skill, error) {
@@ -358,6 +363,7 @@ type SkillSourceInput struct {
 	Name        string `json:"name"`
 	UpstreamURL string `json:"upstream_url"`
 	PinnedSHA   string `json:"pinned_sha"`
+	PathFilter  string `json:"path_filter"`
 	Kind        string `json:"kind"`
 }
 
@@ -367,6 +373,7 @@ func (s *Store) CreateSkillSource(ctx context.Context, in SkillSourceInput) (mod
 		Name:        strings.TrimSpace(in.Name),
 		UpstreamURL: strings.TrimSpace(in.UpstreamURL),
 		PinnedSHA:   strings.TrimSpace(in.PinnedSHA),
+		PathFilter:  strings.TrimSpace(in.PathFilter),
 		Kind:        strings.TrimSpace(in.Kind),
 	}
 	if source.PinnedSHA == "" {
@@ -381,18 +388,18 @@ func (s *Store) CreateSkillSource(ctx context.Context, in SkillSourceInput) (mod
 	if err := validateSkillSourceKind(source.Kind); err != nil {
 		return models.SkillSource{}, err
 	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO skill_sources (id, name, upstream_url, pinned_sha, kind)
-		VALUES ($1,$2,$3,$4,$5)`, source.ID, source.Name, source.UpstreamURL, source.PinnedSHA, source.Kind); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO skill_sources (id, name, upstream_url, pinned_sha, path_filter, kind)
+		VALUES ($1,$2,$3,$4,$5,$6)`, source.ID, source.Name, source.UpstreamURL, source.PinnedSHA, source.PathFilter, source.Kind); err != nil {
 		return models.SkillSource{}, err
 	}
 	return s.GetSkillSource(ctx, source.ID)
 }
 
 func (s *Store) UpsertSkillSource(ctx context.Context, source models.SkillSource) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO skill_sources (id, name, upstream_url, pinned_sha, kind)
-		VALUES ($1,$2,$3,$4,$5)
-		ON CONFLICT (name) DO UPDATE SET upstream_url=excluded.upstream_url, pinned_sha=excluded.pinned_sha, kind=excluded.kind, updated_at=now()`,
-		source.ID, source.Name, source.UpstreamURL, source.PinnedSHA, source.Kind)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO skill_sources (id, name, upstream_url, pinned_sha, path_filter, kind)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (name) DO UPDATE SET upstream_url=excluded.upstream_url, pinned_sha=excluded.pinned_sha, path_filter=excluded.path_filter, kind=excluded.kind, updated_at=now()`,
+		source.ID, source.Name, source.UpstreamURL, source.PinnedSHA, source.PathFilter, source.Kind)
 	return err
 }
 
@@ -433,6 +440,23 @@ func (s *Store) SetSkillSourceUpdate(ctx context.Context, id string, hasUpdate b
 	return err
 }
 
+func (s *Store) SetSkillIgnored(ctx context.Context, id string, ignored bool) (models.Skill, error) {
+	if ignored {
+		var assigned int
+		if err := s.db.GetContext(ctx, &assigned, "SELECT count(*) FROM agent_skills WHERE skill_id=$1", id); err != nil {
+			return models.Skill{}, err
+		}
+		if assigned > 0 {
+			return models.Skill{}, ErrConflict
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE skills SET ignored=$2, updated_at=now() WHERE id=$1 AND archived=false", id, ignored); err != nil {
+		return models.Skill{}, err
+	}
+	s.Notify(ctx, "skill", id)
+	return s.GetSkill(ctx, id)
+}
+
 func (s *Store) UpsertSkillsForSource(ctx context.Context, sourceID string, skills []models.Skill) error {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
@@ -443,8 +467,8 @@ func (s *Store) UpsertSkillsForSource(ctx context.Context, sourceID string, skil
 		return err
 	}
 	for _, skill := range skills {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO skills (id, source_id, name, path_in_source, version, archived)
-			VALUES ($1,$2,$3,$4,$5,false)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO skills (id, source_id, name, path_in_source, version, archived, ignored)
+			VALUES ($1,$2,$3,$4,$5,false,false)
 			ON CONFLICT (source_id, path_in_source) DO UPDATE SET name=excluded.name, version=excluded.version, archived=false, updated_at=now()`,
 			skill.ID, sourceID, skill.Name, skill.PathInSource, skill.Version); err != nil {
 			_ = tx.Rollback()
