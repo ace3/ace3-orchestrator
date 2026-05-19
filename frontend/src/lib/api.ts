@@ -71,6 +71,9 @@ export type Task = {
   retry_count: number;
   tags: string[];
   lifecycle_id: string;
+  checkout_run_id: string | null;
+  execution_run_id: string | null;
+  execution_state: string | null;
 };
 
 export type TaskArtifact = {
@@ -99,12 +102,61 @@ export type Run = {
   id: string;
   agent_id: string;
   task_id: string;
+  wakeup_id: string | null;
   status: "queued" | "running" | "done" | "error" | "cancelled";
   cli_kind: "claude" | "codex";
   started_at: string | null;
   finished_at: string | null;
   exit_code: number | null;
   worktree_path: string | null;
+};
+
+export type AgentWakeup = {
+  id: string;
+  agent_id: string;
+  task_id: string;
+  source: string;
+  reason: string;
+  payload_json: Record<string, unknown>;
+  context_snapshot: Record<string, unknown>;
+  idempotency_key: string | null;
+  requester_type: string;
+  requester_id: string | null;
+  status: "queued" | "claimed" | "running" | "done" | "error" | "cancelled" | "coalesced";
+  coalesced_count: number;
+  run_id: string | null;
+  error: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskInteraction = {
+  id: string;
+  task_id: string;
+  kind: "suggest_tasks" | "ask_user_questions" | "request_confirmation" | "handoff" | "qa_finding" | "approval_request";
+  status: "open" | "accepted" | "rejected" | "resolved" | "cancelled";
+  title: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  continuation_policy: "none" | "wake_assignee";
+  idempotency_key: string | null;
+  source_comment_id: string | null;
+  source_run_id: string | null;
+  created_by: string;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskLiveness = {
+  task_id: string;
+  liveness: "ready" | "running" | "waiting" | "stalled";
+  has_active_run: boolean;
+  has_queued_wake: boolean;
+  has_waiting_interaction: boolean;
+  has_human_review: boolean;
+  task_updated_at: string;
 };
 
 export type RunEvent = {
@@ -235,9 +287,15 @@ export const listTaskArtifacts = (taskId: string) => api<TaskArtifact[]>(`/tasks
 export const createTaskArtifact = (taskId: string, body: Partial<TaskArtifact>) => api<TaskArtifact>(`/tasks/${taskId}/artifacts`, { method: "POST", body: JSON.stringify(body) });
 export const updateTaskArtifact = (id: string, body: Partial<TaskArtifact>) => api<TaskArtifact>(`/task-artifacts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const deleteTaskArtifact = (id: string) => api<{ deleted: boolean }>(`/task-artifacts/${id}`, { method: "DELETE" });
-export const runTask = (taskId: string) => api<Run>(`/tasks/${taskId}/run`, { method: "POST" });
+export const runTask = (taskId: string) => api<AgentWakeup>(`/tasks/${taskId}/run`, { method: "POST" });
 export const listRuns = (taskId: string) => api<Run[]>(`/tasks/${taskId}/runs`);
 export const listRunEvents = (runId: string, since = 0) => api<RunEvent[]>(`/runs/${runId}/events?since=${since}`);
+export const listWakeups = (taskId: string) => api<AgentWakeup[]>(`/tasks/${taskId}/wakeups`);
+export const listInteractions = (taskId: string) => api<TaskInteraction[]>(`/tasks/${taskId}/interactions`);
+export const acceptInteraction = (id: string) => api<TaskInteraction>(`/task-interactions/${id}/accept`, { method: "POST" });
+export const rejectInteraction = (id: string) => api<TaskInteraction>(`/task-interactions/${id}/reject`, { method: "POST" });
+export const getTaskLiveness = (taskId: string) => api<TaskLiveness>(`/tasks/${taskId}/liveness`);
+export const getActiveRun = (taskId: string) => api<Run | null>(`/tasks/${taskId}/active-run`);
 export const heartbeat = () => api<{ queued: number }>("/heartbeat", { method: "POST" });
 export const listInstalledSkills = () => api<Skill[]>("/skills");
 export const getSkillTree = (id: string) => api<SkillTreeResponse>(`/skills/${id}/tree`);

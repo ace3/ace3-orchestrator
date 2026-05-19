@@ -79,11 +79,16 @@ func (o *Orchestrator) DispatchOnce(ctx context.Context) (int, error) {
 		slog.Warn("monthly cost ceiling reached", "spent_usd", spent, "limit_usd", o.cfg.MonthMaxUSD)
 		return 0, nil
 	}
-	return o.store.DispatchQueuedRuns(ctx, o.cfg.MaxTasksPerTick)
+	return o.store.DispatchWakeups(ctx, o.cfg.MaxTasksPerTick)
 }
 
-func (o *Orchestrator) EnqueueTask(ctx context.Context, taskID string) (models.Run, error) {
-	return o.store.EnqueueTaskRun(ctx, taskID)
+func (o *Orchestrator) EnqueueTask(ctx context.Context, taskID string) (models.AgentWakeup, error) {
+	return o.store.EnqueueTaskWakeup(ctx, taskID, store.WakeupInput{
+		Source:        "manual",
+		Reason:        "manual_run",
+		RequesterType: "human",
+		RequesterID:   stringPtr("ignas"),
+	})
 }
 
 func (o *Orchestrator) worker(ctx context.Context, index int) {
@@ -93,7 +98,7 @@ func (o *Orchestrator) worker(ctx context.Context, index int) {
 			return
 		default:
 		}
-		run, ok, err := o.store.ClaimQueuedRun(ctx)
+		run, ok, err := o.store.ClaimQueuedWakeup(ctx)
 		if err != nil {
 			slog.Error("worker claim failed", "worker", index, "error", err)
 			time.Sleep(time.Second)
@@ -108,7 +113,7 @@ func (o *Orchestrator) worker(ctx context.Context, index int) {
 }
 
 func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
-	agent, task, repo, comments, artifacts, err := o.store.TaskContext(ctx, run)
+	agent, task, repo, comments, artifacts, control, err := o.store.TaskRunContext(ctx, run)
 	if err != nil {
 		o.failRun(ctx, run, "", fmt.Errorf("load task context: %w", err))
 		return
@@ -143,12 +148,17 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 			cleanup()
 		}
 	}()
-	prompt := BuildPromptWithSkillDocs(agent, task, repo, comments, artifacts, skillDocs)
+	prompt := BuildPromptWithControlPlane(agent, task, repo, comments, artifacts, skillDocs, control)
+	var sessionID string
+	if control.RuntimeState != nil && control.RuntimeState.SessionID != nil {
+		sessionID = *control.RuntimeState.SessionID
+	}
 	result, err := runner.Run(ctx, RunRequest{
 		Prompt:       prompt,
 		SystemPrompt: agent.RolePrompt,
 		WorktreePath: worktree,
 		Profile:      deref(agent.CLIProfile),
+		SessionID:    sessionID,
 		Timeout:      o.cfg.CLITimeout,
 		MaxCostUSD:   o.cfg.RunMaxUSD,
 		OnEvent: func(level, msg string) {
@@ -158,6 +168,9 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 	if err != nil {
 		o.failRun(ctx, run, hashablePrompt(agent.RolePrompt, prompt), err)
 		return
+	}
+	if result.SessionID == nil {
+		o.store.AppendRunEvent(ctx, run.ID, "warn", "runner did not report a session id; future runs will start without CLI resume continuity")
 	}
 	shouldCleanup = !result.Parsed.TaskUpdates.KeepWorktree
 	tx, err := o.store.DB().BeginTxx(ctx, nil)
@@ -175,6 +188,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		return
 	}
 	o.store.Notify(ctx, "task", task.ID)
+	_ = o.store.UpdateRuntimeState(ctx, run, result.SessionID, runtimeStateJSON(result), "done")
 	_ = o.store.FinishRun(ctx, run.ID, "done", result.ExitCode, result.TokensIn, result.TokensOut, result.CostUSD, hashablePrompt(agent.RolePrompt, prompt), worktree)
 }
 
@@ -182,11 +196,28 @@ func (o *Orchestrator) failRun(ctx context.Context, run models.Run, prompt strin
 	o.store.AppendRunEvent(ctx, run.ID, "error", err.Error())
 	_, _ = o.store.DB().ExecContext(ctx, `UPDATE tasks SET status='blocked', retry_count=retry_count+1, updated_at=now() WHERE id=$1`, run.TaskID)
 	_, _ = o.store.AddComment(ctx, run.TaskID, "system", "Run failed: "+err.Error())
+	_ = o.store.UpdateRuntimeState(ctx, run, nil, nil, "error")
 	_ = o.store.FinishRun(ctx, run.ID, "error", 1, 0, 0, 0, prompt, "")
+	_ = o.store.FinishWakeupForRun(ctx, run.ID, "error", err.Error())
 }
 
 func hashablePrompt(systemPrompt, taskPrompt string) string {
 	return "System instructions:\n" + systemPrompt + "\n\nTask prompt:\n" + taskPrompt
+}
+
+func runtimeStateJSON(result RunResult) json.RawMessage {
+	sessionIDFound := result.SessionID != nil
+	body, err := json.Marshal(map[string]any{
+		"session_id_found": sessionIDFound,
+		"tokens_in":        result.TokensIn,
+		"tokens_out":       result.TokensOut,
+		"cost_usd":         result.CostUSD,
+		"exit_code":        result.ExitCode,
+	})
+	if err != nil {
+		return json.RawMessage(`{}`)
+	}
+	return body
 }
 
 type runSkillSelection struct {

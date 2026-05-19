@@ -102,8 +102,8 @@ func (a *API) deleteTaskArtifact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) runTask(w http.ResponseWriter, r *http.Request) {
-	run, err := a.orch.EnqueueTask(r.Context(), chi.URLParam(r, "id"))
-	respondCreated(w, run, err)
+	wakeup, err := a.orch.EnqueueTask(r.Context(), chi.URLParam(r, "id"))
+	respondCreated(w, wakeup, err)
 }
 
 func (a *API) listRuns(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +120,82 @@ func (a *API) listRunEvents(w http.ResponseWriter, r *http.Request) {
 	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	events, err := a.store.ListRunEvents(r.Context(), chi.URLParam(r, "id"), since)
 	respond(w, events, err)
+}
+
+func (a *API) listWakeups(w http.ResponseWriter, r *http.Request) {
+	wakeups, err := a.store.ListWakeups(r.Context(), chi.URLParam(r, "id"))
+	respond(w, wakeups, err)
+}
+
+func (a *API) createWakeup(w http.ResponseWriter, r *http.Request) {
+	var in store.WakeupInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if in.RequesterType == "" {
+		in.RequesterType = "api"
+	}
+	wakeup, err := a.store.EnqueueTaskWakeup(r.Context(), chi.URLParam(r, "id"), in)
+	respondCreated(w, wakeup, err)
+}
+
+func (a *API) checkoutTask(w http.ResponseWriter, r *http.Request) {
+	var in store.CheckoutInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	task, err := a.store.CheckoutTask(r.Context(), chi.URLParam(r, "id"), in)
+	respond(w, task, err)
+}
+
+func (a *API) releaseTask(w http.ResponseWriter, r *http.Request) {
+	var in store.ReleaseInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	task, err := a.store.ReleaseTask(r.Context(), chi.URLParam(r, "id"), in)
+	respond(w, task, err)
+}
+
+func (a *API) listInteractions(w http.ResponseWriter, r *http.Request) {
+	interactions, err := a.store.ListInteractions(r.Context(), chi.URLParam(r, "id"))
+	respond(w, interactions, err)
+}
+
+func (a *API) createInteraction(w http.ResponseWriter, r *http.Request) {
+	var in store.InteractionInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if in.CreatedBy == "" {
+		in.CreatedBy = "api"
+	}
+	interaction, err := a.store.CreateInteraction(r.Context(), chi.URLParam(r, "id"), in)
+	respondCreated(w, interaction, err)
+}
+
+func (a *API) acceptInteraction(w http.ResponseWriter, r *http.Request) {
+	interaction, err := a.store.ResolveInteraction(r.Context(), chi.URLParam(r, "id"), "accepted", "human:ignas")
+	respond(w, interaction, err)
+}
+
+func (a *API) rejectInteraction(w http.ResponseWriter, r *http.Request) {
+	interaction, err := a.store.ResolveInteraction(r.Context(), chi.URLParam(r, "id"), "rejected", "human:ignas")
+	respond(w, interaction, err)
+}
+
+func (a *API) taskLiveness(w http.ResponseWriter, r *http.Request) {
+	liveness, err := a.store.GetTaskLiveness(r.Context(), chi.URLParam(r, "id"))
+	respond(w, liveness, err)
+}
+
+func (a *API) activeRun(w http.ResponseWriter, r *http.Request) {
+	run, err := a.store.GetActiveRun(r.Context(), chi.URLParam(r, "id"))
+	respond(w, run, err)
 }
 
 func (a *API) heartbeat(w http.ResponseWriter, r *http.Request) {

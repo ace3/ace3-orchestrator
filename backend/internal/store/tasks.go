@@ -31,6 +31,9 @@ type TaskInput struct {
 }
 
 const maxTaskRetries = 3
+const maxSubtasksPerRun = 5
+const maxTaskTreeDepth = 4
+const maxTasksPerRoot = 50
 
 type CommentInput struct {
 	Body string `json:"body"`
@@ -384,6 +387,10 @@ func (s *Store) RecoverRunningRuns(ctx context.Context) error {
 	for _, run := range runs {
 		s.AppendRunEvent(ctx, run.ID, "warn", "backend restarted while run was active; marking run as error")
 		_, _ = s.db.ExecContext(ctx, `UPDATE runs SET status='error', finished_at=now(), exit_code=1 WHERE id=$1`, run.ID)
+		_, _ = s.db.ExecContext(ctx, `UPDATE tasks SET status='blocked', retry_count=retry_count+1, updated_at=now() WHERE id=$1`, run.TaskID)
+		_ = s.FinishWakeupForRun(ctx, run.ID, "error", "backend restarted while run was active")
+		_ = s.ClearExecutionLock(ctx, run.ID)
+		_ = s.UpdateRuntimeState(ctx, run, nil, nil, "error")
 		_, _ = s.AddComment(ctx, run.TaskID, "system", "Run recovered after backend restart and marked error.")
 		s.Notify(ctx, "run", run.ID)
 	}
@@ -442,6 +449,8 @@ func (s *Store) FinishRun(ctx context.Context, runID, status string, exitCode in
 	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status=$2, finished_at=now(), exit_code=$3, tokens_in=$4, tokens_out=$5, cost_usd=$6, prompt_hash=$7, worktree_path=$8 WHERE id=$1`,
 		runID, status, exitCode, tokensIn, tokensOut, cost, hex.EncodeToString(promptHash[:]), worktree)
 	if err == nil {
+		_ = s.FinishWakeupForRun(ctx, runID, status, "")
+		_ = s.ClearExecutionLock(ctx, runID)
 		s.Notify(ctx, "run", runID)
 	}
 	return err
@@ -505,6 +514,10 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	nextTask := task
 	nextTask.Tags = nextTags
 	nextTask.LifecycleID = nextLifecycleID
+	subtasks, err := s.validatedSubtasks(ctx, tx, task, agent, status, update.CreateSubtasks)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)", uuid.NewString(), task.ID, "agent:"+agent.ID, update.Comment); err != nil {
 		return err
 	}
@@ -515,6 +528,9 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 			return err
 		}
 		assignee = resolved
+		if status == "done" {
+			status = "todo"
+		}
 	} else if !update.RequestHumanReview && status == "done" {
 		next, err := advanceLifecycleTx(ctx, tx, nextTask)
 		if err != nil {
@@ -528,8 +544,15 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	if _, err := tx.ExecContext(ctx, "UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, tags=$4, lifecycle_id=$5, updated_at=now() WHERE id=$1", task.ID, status, assignee, nextTags, nextLifecycleID); err != nil {
 		return err
 	}
-	for _, subtask := range update.CreateSubtasks {
+	for _, subtask := range subtasks {
 		id := uuid.NewString()
+		var exists bool
+		if err := tx.GetContext(ctx, &exists, "SELECT EXISTS (SELECT 1 FROM tasks WHERE parent_id=$1 AND title=$2)", task.ID, subtask.Title); err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
 		var subtaskAssignee *string
 		if !emptyAgentRef(subtask.AssigneeAgentID) {
 			resolved, err := resolveAgentRefTx(ctx, tx, subtask.AssigneeAgentID)
@@ -561,6 +584,128 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		}
 	}
 	return nil
+}
+
+type taskTreeStats struct {
+	RootID    string `db:"root_id"`
+	Depth     int    `db:"depth"`
+	TaskCount int    `db:"task_count"`
+}
+
+func (s *Store) validatedSubtasks(ctx context.Context, tx *sqlx.Tx, task models.Task, agent models.Agent, status string, subtasks []Subtask) ([]Subtask, error) {
+	if len(subtasks) == 0 {
+		return nil, nil
+	}
+	if agent.ID == "qa" && status == "done" {
+		return nil, nil
+	}
+	if !canSpawnGenericSubtasks(agent) {
+		filtered := make([]Subtask, 0, len(subtasks))
+		for _, subtask := range subtasks {
+			if !isGenericSubtaskTitle(subtask.Title) {
+				filtered = append(filtered, subtask)
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, nil
+		}
+		subtasks = filtered
+	}
+	if len(subtasks) > maxSubtasksPerRun {
+		return nil, fmt.Errorf("subtask spawn cap exceeded: %d > %d", len(subtasks), maxSubtasksPerRun)
+	}
+	stats, err := taskTreeStatsFor(ctx, tx, task.ID)
+	if err != nil {
+		return nil, err
+	}
+	if stats.Depth+1 > maxTaskTreeDepth {
+		return nil, fmt.Errorf("subtask depth cap exceeded for root %s: next depth %d > %d", stats.RootID, stats.Depth+1, maxTaskTreeDepth)
+	}
+	if stats.TaskCount+len(subtasks) > maxTasksPerRoot {
+		return nil, fmt.Errorf("task tree size cap exceeded for root %s: %d + %d > %d", stats.RootID, stats.TaskCount, len(subtasks), maxTasksPerRoot)
+	}
+	out := make([]Subtask, 0, len(subtasks))
+	for _, subtask := range subtasks {
+		out = append(out, contextualizeSubtask(task, subtask))
+	}
+	return out, nil
+}
+
+func taskTreeStatsFor(ctx context.Context, tx *sqlx.Tx, taskID string) (taskTreeStats, error) {
+	var stats taskTreeStats
+	err := tx.GetContext(ctx, &stats, `WITH RECURSIVE ancestors AS (
+			SELECT id, parent_id, 0 AS depth FROM tasks WHERE id=$1
+			UNION ALL
+			SELECT t.id, t.parent_id, a.depth+1 FROM tasks t JOIN ancestors a ON a.parent_id=t.id
+		),
+		root AS (
+			SELECT id FROM ancestors WHERE parent_id IS NULL ORDER BY depth DESC LIMIT 1
+		),
+		descendants AS (
+			SELECT t.id, 0 AS depth FROM tasks t JOIN root r ON t.id=r.id
+			UNION ALL
+			SELECT c.id, d.depth+1 FROM tasks c JOIN descendants d ON c.parent_id=d.id
+		)
+		SELECT root.id AS root_id, COALESCE((SELECT max(depth) FROM ancestors), 0) AS depth, count(descendants.id) AS task_count
+		FROM root, descendants
+		GROUP BY root.id`, taskID)
+	return stats, err
+}
+
+func contextualizeSubtask(parent models.Task, subtask Subtask) Subtask {
+	title := strings.TrimSpace(subtask.Title)
+	if title == "" {
+		title = "Continue " + parent.Title
+	}
+	if isGenericSubtaskTitle(title) {
+		title = baseTaskTitle(parent.Title) + ": " + strings.ToLower(title[:1]) + title[1:]
+	}
+	description := strings.TrimSpace(subtask.Description)
+	parentContext := strings.TrimSpace(parent.Title + "\n" + parent.Description)
+	if parentContext != "" && !strings.Contains(strings.ToLower(description), strings.ToLower(parent.Title)) {
+		if description == "" {
+			description = "Parent task context:\n" + parentContext
+		} else {
+			description = description + "\n\nParent task context:\n" + parentContext
+		}
+	}
+	subtask.Title = title
+	subtask.Description = description
+	return subtask
+}
+
+func canSpawnGenericSubtasks(agent models.Agent) bool {
+	role := strings.ToLower(strings.TrimSpace(agent.Role))
+	if role == "" {
+		role = strings.ToLower(strings.TrimSpace(agent.ID))
+	}
+	return role == "pm" || role == "em"
+}
+
+func isGenericSubtaskTitle(title string) bool {
+	switch strings.ToLower(strings.TrimSpace(title)) {
+	case "implement backend slice", "verify implementation", "implement frontend slice", "write tests", "qa verification":
+		return true
+	default:
+		return false
+	}
+}
+
+func baseTaskTitle(title string) string {
+	base := strings.TrimSpace(title)
+	for {
+		next := base
+		for _, suffix := range []string{": implement backend slice", ": verify implementation", ": implement frontend slice", ": write tests", ": qa verification"} {
+			if strings.HasSuffix(strings.ToLower(next), suffix) {
+				next = strings.TrimSpace(next[:len(next)-len(suffix)])
+				break
+			}
+		}
+		if next == base {
+			return base
+		}
+		base = next
+	}
 }
 
 // advanceLifecycleTx returns the agents.id of the next lifecycle step for task,

@@ -5,11 +5,18 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 PROJECT_NAME="mp-e2e-one-task-${RANDOM}-$(date +%s)"
 ENV_FILE="${TMP_DIR}/.env"
+DEPLOY_ENV_FILE="${ROOT_DIR}/deploy/.env"
+DEPLOY_ENV_BACKUP=""
 API_TOKEN="e2e-token"
 
 cleanup() {
-  docker compose -p "${PROJECT_NAME}" -f "${ROOT_DIR}/deploy/docker-compose.yml" --env-file "${ENV_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "${TMP_DIR}"
+	docker compose -p "${PROJECT_NAME}" -f "${ROOT_DIR}/deploy/docker-compose.yml" --env-file "${ENV_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+	if [[ -n "${DEPLOY_ENV_BACKUP}" && -f "${DEPLOY_ENV_BACKUP}" ]]; then
+		mv "${DEPLOY_ENV_BACKUP}" "${DEPLOY_ENV_FILE}"
+	else
+		rm -f "${DEPLOY_ENV_FILE}"
+	fi
+	rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
 
@@ -41,6 +48,12 @@ HOST_CODE_DIR=${TMP_DIR}/code
 HOST_CLAUDE_DIR=${TMP_DIR}/claude
 HOST_CODEX_DIR=${TMP_DIR}/codex
 EOF
+
+if [[ -f "${DEPLOY_ENV_FILE}" ]]; then
+	DEPLOY_ENV_BACKUP="${TMP_DIR}/deploy.env.backup"
+	cp "${DEPLOY_ENV_FILE}" "${DEPLOY_ENV_BACKUP}"
+fi
+cp "${ENV_FILE}" "${DEPLOY_ENV_FILE}"
 
 docker compose -p "${PROJECT_NAME}" -f "${ROOT_DIR}/deploy/docker-compose.yml" --env-file "${ENV_FILE}" up -d --build
 
@@ -130,18 +143,29 @@ async function main() {
   });
   assert(task.assignee_agent_id === backend.id, `parent assignee was not canonicalized: ${task.assignee_agent_id}`);
 
-  const run = await api(`/api/tasks/${task.id}/run`, { method: "POST" });
-  let currentRun = run;
+  const wakeup = await api(`/api/tasks/${task.id}/run`, { method: "POST" });
+  let run = null;
+  let currentRun = null;
   for (let i = 0; i < 60; i++) {
+    if (!run) {
+      const wakeups = await api(`/api/tasks/${task.id}/wakeups`);
+      const currentWakeup = wakeups.find((item) => item.id === wakeup.id);
+      if (currentWakeup && currentWakeup.run_id) {
+        run = await api(`/api/runs/${currentWakeup.run_id}`);
+      } else {
+        await sleep(1000);
+        continue;
+      }
+    }
     currentRun = await api(`/api/runs/${run.id}`);
     if (currentRun.status === "done") break;
     if (currentRun.status === "error" || currentRun.status === "cancelled") break;
     await sleep(1000);
   }
 
-  const events = await api(`/api/runs/${run.id}/events`);
-  if (currentRun.status !== "done") {
-    throw new Error(`run ended as ${currentRun.status}; events: ${events.map((e) => `${e.level}:${e.message}`).join(" | ")}`);
+  const events = run ? await api(`/api/runs/${run.id}/events`) : [];
+  if (!currentRun || currentRun.status !== "done") {
+    throw new Error(`run ended as ${currentRun ? currentRun.status : "unclaimed"}; events: ${events.map((e) => `${e.level}:${e.message}`).join(" | ")}`);
   }
 
   const tasks = await api(`/api/projects/${project.id}/tasks`);

@@ -42,10 +42,119 @@ List and update tasks:
 
 Run orchestration:
 
-- `POST /api/tasks/{task_id}/run` queues one run immediately.
-- `POST /api/heartbeat` queues eligible assigned tasks.
+- `POST /api/tasks/{task_id}/run` creates a manual wakeup for the assignee.
+- `POST /api/heartbeat` creates heartbeat wakeups for eligible assigned tasks.
+- `GET /api/tasks/{task_id}/wakeups` lists durable wake commands.
+- `POST /api/tasks/{task_id}/wakeups` creates a wakeup.
 - `GET /api/tasks/{task_id}/runs` lists run history.
+- `GET /api/tasks/{task_id}/active-run` returns the active queued/running run or `null`.
+- `GET /api/tasks/{task_id}/liveness` returns `ready`, `running`, `waiting`, or `stalled`.
 - `GET /api/runs/{run_id}/events?since={event_id}` reads log events.
+
+New dispatch always flows through `agent_wakeups`; `runs` is the execution
+ledger and links back with `wakeup_id`. Existing legacy runs remain readable.
+Agent-created subtasks are bounded to prevent runaway fan-out: at most 5
+subtasks per run, depth 4 per task tree, and 50 tasks per root. Duplicate child
+titles under the same parent are skipped. Generic child titles are prefixed with
+the parent task title so child tasks keep the original request context. QA runs
+that finish with `status = "done"` are terminal for that branch and cannot spawn
+new children.
+
+Create a wakeup:
+
+```http
+POST /api/tasks/{task_id}/wakeups
+```
+
+```json
+{
+  "source": "manual",
+  "reason": "operator_retry",
+  "payload_json": {"note": "retry after review"},
+  "context_snapshot": {"source": "task_drawer"},
+  "idempotency_key": "optional-key",
+  "requester_type": "human",
+  "requester_id": "ignas"
+}
+```
+
+Wake statuses are `queued`, `claimed`, `running`, `done`, `error`,
+`cancelled`, and `coalesced`. Reusing the same idempotency key with the same
+payload returns the existing wakeup; reusing it with a different payload returns
+`409 conflict`. Duplicate queued timer/manual wakeups coalesce.
+
+Checkout and release:
+
+- `POST /api/tasks/{task_id}/checkout`
+- `POST /api/tasks/{task_id}/release`
+
+```json
+{"run_id": "run-or-lock-id", "expected_status": "todo"}
+```
+
+Checkout sets `checkout_run_id`, moves the task to `in_progress`, and returns
+`409 conflict` if a checkout/execution lock already exists or the expected
+status is stale. Release clears the lock and returns `409 conflict` when the
+supplied `run_id` does not match.
+
+## Task Interactions
+
+Interactions are actionable workflow cards. Comments remain audit text; comments
+do not wake agents by themselves.
+
+Allowed `kind` values:
+
+- `suggest_tasks`
+- `ask_user_questions`
+- `request_confirmation`
+- `handoff`
+- `qa_finding`
+- `approval_request`
+
+Allowed `status` values:
+
+- `open`
+- `accepted`
+- `rejected`
+- `resolved`
+- `cancelled`
+
+Create an interaction:
+
+```http
+POST /api/tasks/{task_id}/interactions
+```
+
+```json
+{
+  "kind": "request_confirmation",
+  "title": "Approve rollout plan",
+  "summary": "Agent needs operator approval before continuing.",
+  "payload": {"question": "Approve the plan?"},
+  "continuation_policy": "wake_assignee",
+  "idempotency_key": "optional-key",
+  "source_comment_id": "comment-id-or-null",
+  "source_run_id": "run-id-or-null",
+  "created_by": "agent:em"
+}
+```
+
+Interaction routes:
+
+- `GET /api/tasks/{task_id}/interactions`
+- `POST /api/tasks/{task_id}/interactions`
+- `POST /api/task-interactions/{interaction_id}/accept`
+- `POST /api/task-interactions/{interaction_id}/reject`
+
+Accepting an open interaction with `continuation_policy = "wake_assignee"`
+creates a wakeup for the task assignee.
+
+## Runtime Continuity
+
+Runs include wakeup context, recent run summaries, and saved runtime state in
+the agent prompt. CLI session resume is best-effort: if Claude or Codex emits a
+session id, it is saved in `agent_runtime_state`; if no session id is reported,
+the run log gets a warning and the next run starts without CLI resume continuity.
 
 ## Task Artifacts
 
