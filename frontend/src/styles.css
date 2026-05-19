@@ -1079,6 +1079,18 @@ tbody tr:hover { background: var(--bg-hover); }
 .danger-card .detail-card-header { background: var(--danger-soft); border-bottom-color: rgba(212, 72, 72, 0.22); }
 .danger-card .detail-card-sub { color: var(--danger-text); }
 
+.liveness-ready,
+.liveness-running,
+.liveness-waiting,
+.liveness-stalled {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.liveness-ready { color: var(--text-dim); }
+.liveness-running { color: var(--accent); }
+.liveness-waiting { color: #b7791f; }
+.liveness-stalled { color: var(--danger-text); }
+
 @media (max-width: 720px) {
   .field-grid { grid-template-columns: 1fr; }
   .detail-card-header { flex-direction: column; align-items: stretch; }

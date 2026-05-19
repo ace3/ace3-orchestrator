@@ -12,6 +12,7 @@ type runMetrics struct {
 	tokensIn  int
 	tokensOut int
 	costUSD   float64
+	sessionID *string
 }
 
 func (m *runMetrics) observe(line string) {
@@ -34,12 +35,39 @@ func (m *runMetrics) observe(line string) {
 			}
 		}
 	})
+	if sessionID := findSessionID(value); sessionID != "" {
+		m.sessionID = &sessionID
+	}
 }
 
 func (m *runMetrics) cost() float64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.costUSD
+}
+
+func findSessionID(value any) string {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+			if normalized == "session_id" || normalized == "sessionid" || normalized == "thread_id" {
+				if text, ok := child.(string); ok && strings.TrimSpace(text) != "" {
+					return strings.TrimSpace(text)
+				}
+			}
+			if found := findSessionID(child); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, child := range item {
+			if found := findSessionID(child); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }
 
 func walkMetrics(value any, visit func(key string, number float64)) {

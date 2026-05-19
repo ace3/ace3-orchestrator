@@ -279,6 +279,144 @@ func TestCreateTaskReturnsClearUnknownAssigneeError(t *testing.T) {
 	}
 }
 
+func TestCheckoutTaskRejectsDoubleCheckout(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	checkoutRun := "run-1"
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs("task-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "repo_id", "title", "description", "status", "assignee_agent_id", "parent_id", "priority", "retry_count", "tags", "lifecycle_id", "checkout_run_id", "execution_run_id", "execution_state", "created_at", "updated_at"}).
+			AddRow("task-1", "project-1", nil, "Do work", "", "in_progress", "agent-1", nil, 0, 0, "{}", "default", checkoutRun, nil, "checked_out", now, now))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	err = nil
+	_, err = store.CheckoutTask(context.Background(), "task-1", CheckoutInput{})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("got %v, want ErrConflict", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReleaseTaskRejectsStaleRun(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	checkoutRun := "run-1"
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs("task-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "project_id", "repo_id", "title", "description", "status", "assignee_agent_id", "parent_id", "priority", "retry_count", "tags", "lifecycle_id", "checkout_run_id", "execution_run_id", "execution_state", "created_at", "updated_at"}).
+			AddRow("task-1", "project-1", nil, "Do work", "", "in_progress", "agent-1", nil, 0, 0, "{}", "default", checkoutRun, nil, "checked_out", now, now))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	staleRun := "run-2"
+	_, err = store.ReleaseTask(context.Background(), "task-1", ReleaseInput{RunID: &staleRun})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("got %v, want ErrConflict", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnqueueWakeupConflictsOnDifferentPayloadForIdempotencyKey(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	key := "same-key"
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM agent_wakeups WHERE agent_id=$1 AND task_id=$2 AND idempotency_key=$3`)).
+		WithArgs("agent-1", "task-1", key).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "agent_id", "task_id", "source", "reason", "payload_json", "context_snapshot", "idempotency_key", "requester_type", "status", "coalesced_count", "error", "created_at", "updated_at"}).
+			AddRow("wake-1", "agent-1", "task-1", "manual", "manual_run", []byte(`{"old":true}`), []byte(`{}`), key, "api", "queued", 0, "", now, now))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT payload_json=$4::jsonb AND context_snapshot=$5::jsonb FROM agent_wakeups WHERE agent_id=$1 AND task_id=$2 AND idempotency_key=$3`)).
+		WithArgs("agent-1", "task-1", key, []byte(`{"new":true}`), []byte(`{}`)).
+		WillReturnRows(sqlmock.NewRows([]string{"same"}).AddRow(false))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	_, err = store.EnqueueWakeup(context.Background(), "task-1", "agent-1", WakeupInput{
+		Source:         "manual",
+		Reason:         "manual_run",
+		PayloadJSON:    []byte(`{"new":true}`),
+		IdempotencyKey: &key,
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("got %v, want ErrConflict", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimQueuedWakeupCreatesExactlyOneLinkedRun(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM agent_wakeups WHERE status='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "agent_id", "task_id", "source", "reason", "payload_json", "context_snapshot", "requester_type", "status", "coalesced_count", "error", "created_at", "updated_at"}).
+			AddRow("wake-1", "agent-1", "task-1", "manual", "manual_run", []byte(`{}`), []byte(`{}`), "api", "queued", 0, "", now, now))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT p.default_cli_kind
+		FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`)).
+		WithArgs("task-1").
+		WillReturnRows(sqlmock.NewRows([]string{"default_cli_kind"}).AddRow("codex"))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO runs (id, agent_id, task_id, wakeup_id, status, cli_kind, started_at)
+		VALUES ($1,$2,$3,$4,'running',$5,now())`)).
+		WithArgs(sqlmock.AnyArg(), "agent-1", "task-1", "wake-1", "codex").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE agent_wakeups SET status='running', claimed_at=now(), updated_at=now(), run_id=$2 WHERE id=$1`)).
+		WithArgs("wake-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE tasks
+		SET status=CASE WHEN status IN ('todo','blocked') THEN 'in_progress' ELSE status END,
+		    checkout_run_id=$2,
+		    execution_run_id=$2,
+		    execution_state='running',
+		    updated_at=now()
+		WHERE id=$1`)).
+		WithArgs("task-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	for i := 0; i < 3; i++ {
+		mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
+			WithArgs(sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM runs WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "agent_id", "task_id", "wakeup_id", "status", "cli_kind", "tokens_in", "tokens_out", "cost_usd", "prompt_hash", "created_at"}).
+			AddRow("run-1", "agent-1", "task-1", "wake-1", "running", "codex", 0, 0, 0, "", now))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	run, ok, err := store.ClaimQueuedWakeup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || run.WakeupID == nil || *run.WakeupID != "wake-1" || run.Status != "running" {
+		t.Fatalf("unexpected claimed run: ok=%v run=%+v", ok, run)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpdateAgentRuntimeDoesNotChangePromptNameRoleOrSkills(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -367,6 +505,103 @@ func TestApplyAgentResponseUpdatesTagsLifecycleAndAdvancesWithNewRouting(t *test
 			Tags:        &tags,
 			LifecycleID: &lifecycleID,
 		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidatedSubtasksEnforcesRunCapBeforeDBLookup(t *testing.T) {
+	store := New(nil, nil)
+	subtasks := make([]Subtask, maxSubtasksPerRun+1)
+	for i := range subtasks {
+		subtasks[i] = Subtask{Title: "Task"}
+	}
+	_, err := store.validatedSubtasks(context.Background(), nil, models.Task{ID: "task-1"}, models.Agent{ID: "em"}, "done", subtasks)
+	if err == nil || !strings.Contains(err.Error(), "subtask spawn cap exceeded") {
+		t.Fatalf("got %v, want spawn cap error", err)
+	}
+}
+
+func TestValidatedSubtasksSuppressesTerminalQASpawn(t *testing.T) {
+	store := New(nil, nil)
+	subtasks, err := store.validatedSubtasks(context.Background(), nil, models.Task{ID: "task-1"}, models.Agent{ID: "qa"}, "done", []Subtask{{Title: "Implement backend slice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subtasks) != 0 {
+		t.Fatalf("got %d subtasks, want 0", len(subtasks))
+	}
+}
+
+func TestContextualizeSubtaskPreservesParentRequest(t *testing.T) {
+	parent := models.Task{Title: "Add Recent runs panel", Description: "Show recent run history in the UI."}
+	subtask := contextualizeSubtask(parent, Subtask{Title: "Implement backend slice", Description: "Add the API."})
+	if subtask.Title != "Add Recent runs panel: implement backend slice" {
+		t.Fatalf("unexpected title: %q", subtask.Title)
+	}
+	if !strings.Contains(subtask.Description, "Parent task context:") || !strings.Contains(subtask.Description, "Add Recent runs panel") {
+		t.Fatalf("description lost parent context: %q", subtask.Description)
+	}
+}
+
+func TestValidatedSubtasksSuppressesGenericSpawnerOutsidePlanningRoles(t *testing.T) {
+	store := New(nil, nil)
+	subtasks, err := store.validatedSubtasks(context.Background(), nil, models.Task{ID: "task-1"}, models.Agent{ID: "backend", Role: "backend"}, "done", []Subtask{{Title: "Implement backend slice"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subtasks) != 0 {
+		t.Fatalf("got %d subtasks, want 0", len(subtasks))
+	}
+}
+
+func TestContextualizeSubtaskUsesBaseParentTitle(t *testing.T) {
+	parent := models.Task{Title: "Add Recent runs panel: implement backend slice", Description: "Show recent run history in the UI."}
+	subtask := contextualizeSubtask(parent, Subtask{Title: "Verify implementation"})
+	if subtask.Title != "Add Recent runs panel: verify implementation" {
+		t.Fatalf("unexpected title: %q", subtask.Title)
+	}
+}
+
+func TestApplyAgentResponseReassignDoneKeepsTaskRunnable(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	backendID := "backend"
+	resolveQuery := `SELECT id FROM agents
+		WHERE id=$1 OR role=$1 OR name=$1
+		ORDER BY CASE WHEN id=$1 THEN 0 WHEN role=$1 THEN 1 ELSE 2 END, id
+		LIMIT 1`
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)")).
+		WithArgs(sqlmock.AnyArg(), "task-1", "agent:pm", "route directly").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(resolveQuery)).
+		WithArgs("backend").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(backendID))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, tags=$4, lifecycle_id=$5, updated_at=now() WHERE id=$1")).
+		WithArgs("task-1", "todo", sqlmock.AnyArg(), sqlmock.AnyArg(), "default").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	tx, err := store.DB().BeginTxx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reassign := "backend"
+	err = store.ApplyAgentResponse(context.Background(), tx, models.Task{ID: "task-1", ProjectID: "project-1", LifecycleID: "default"}, models.Agent{ID: "pm"}, AgentResponse{
+		TaskUpdates: TaskUpdates{Status: "done", Comment: "route directly", ReassignTo: &reassign},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

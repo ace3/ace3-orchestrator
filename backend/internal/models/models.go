@@ -79,6 +79,9 @@ type Task struct {
 	RetryCount      int            `db:"retry_count" json:"retry_count"`
 	Tags            pq.StringArray `db:"tags" json:"tags"`
 	LifecycleID     string         `db:"lifecycle_id" json:"lifecycle_id"`
+	CheckoutRunID   *string        `db:"checkout_run_id" json:"checkout_run_id"`
+	ExecutionRunID  *string        `db:"execution_run_id" json:"execution_run_id"`
+	ExecutionState  *string        `db:"execution_state" json:"execution_state"`
 	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
 }
@@ -109,6 +112,7 @@ type Run struct {
 	ID           string     `db:"id" json:"id"`
 	AgentID      string     `db:"agent_id" json:"agent_id"`
 	TaskID       string     `db:"task_id" json:"task_id"`
+	WakeupID     *string    `db:"wakeup_id" json:"wakeup_id"`
 	Status       string     `db:"status" json:"status"`
 	CLIKind      string     `db:"cli_kind" json:"cli_kind"`
 	StartedAt    *time.Time `db:"started_at" json:"started_at"`
@@ -121,6 +125,67 @@ type Run struct {
 	WorktreePath *string    `db:"worktree_path" json:"worktree_path"`
 	LogPath      *string    `db:"log_path" json:"log_path"`
 	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+}
+
+type AgentWakeup struct {
+	ID              string          `db:"id" json:"id"`
+	AgentID         string          `db:"agent_id" json:"agent_id"`
+	TaskID          string          `db:"task_id" json:"task_id"`
+	Source          string          `db:"source" json:"source"`
+	Reason          string          `db:"reason" json:"reason"`
+	PayloadJSON     json.RawMessage `db:"payload_json" json:"payload_json"`
+	ContextSnapshot json.RawMessage `db:"context_snapshot" json:"context_snapshot"`
+	IdempotencyKey  *string         `db:"idempotency_key" json:"idempotency_key"`
+	RequesterType   string          `db:"requester_type" json:"requester_type"`
+	RequesterID     *string         `db:"requester_id" json:"requester_id"`
+	Status          string          `db:"status" json:"status"`
+	CoalescedCount  int             `db:"coalesced_count" json:"coalesced_count"`
+	RunID           *string         `db:"run_id" json:"run_id"`
+	ClaimedAt       *time.Time      `db:"claimed_at" json:"claimed_at"`
+	FinishedAt      *time.Time      `db:"finished_at" json:"finished_at"`
+	Error           string          `db:"error" json:"error"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time       `db:"updated_at" json:"updated_at"`
+}
+
+type TaskInteraction struct {
+	ID                 string          `db:"id" json:"id"`
+	TaskID             string          `db:"task_id" json:"task_id"`
+	Kind               string          `db:"kind" json:"kind"`
+	Status             string          `db:"status" json:"status"`
+	Title              string          `db:"title" json:"title"`
+	Summary            string          `db:"summary" json:"summary"`
+	Payload            json.RawMessage `db:"payload" json:"payload"`
+	ContinuationPolicy string          `db:"continuation_policy" json:"continuation_policy"`
+	IdempotencyKey     *string         `db:"idempotency_key" json:"idempotency_key"`
+	SourceCommentID    *string         `db:"source_comment_id" json:"source_comment_id"`
+	SourceRunID        *string         `db:"source_run_id" json:"source_run_id"`
+	CreatedBy          string          `db:"created_by" json:"created_by"`
+	ResolvedBy         *string         `db:"resolved_by" json:"resolved_by"`
+	ResolvedAt         *time.Time      `db:"resolved_at" json:"resolved_at"`
+	CreatedAt          time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time       `db:"updated_at" json:"updated_at"`
+}
+
+type AgentRuntimeState struct {
+	AgentID       string          `db:"agent_id" json:"agent_id"`
+	TaskID        string          `db:"task_id" json:"task_id"`
+	AdapterType   string          `db:"adapter_type" json:"adapter_type"`
+	SessionID     *string         `db:"session_id" json:"session_id"`
+	StateJSON     json.RawMessage `db:"state_json" json:"state_json"`
+	LastRunID     *string         `db:"last_run_id" json:"last_run_id"`
+	LastRunStatus string          `db:"last_run_status" json:"last_run_status"`
+	UpdatedAt     time.Time       `db:"updated_at" json:"updated_at"`
+}
+
+type TaskLiveness struct {
+	TaskID                string    `db:"task_id" json:"task_id"`
+	Liveness              string    `db:"liveness" json:"liveness"`
+	HasActiveRun          bool      `db:"has_active_run" json:"has_active_run"`
+	HasQueuedWake         bool      `db:"has_queued_wake" json:"has_queued_wake"`
+	HasWaitingInteraction bool      `db:"has_waiting_interaction" json:"has_waiting_interaction"`
+	HasHumanReview        bool      `db:"has_human_review" json:"has_human_review"`
+	TaskUpdatedAt         time.Time `db:"task_updated_at" json:"task_updated_at"`
 }
 
 type RunEvent struct {

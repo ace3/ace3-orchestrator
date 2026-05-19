@@ -4,6 +4,7 @@ import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, LayoutDashboard, Me
 import "./styles.css";
 import {
   Agent,
+  AgentWakeup,
   BootstrapStatus,
   Comment,
   OrchestratorMap,
@@ -15,8 +16,11 @@ import {
   SkillSource,
   Task,
   TaskArtifact,
+  TaskInteraction,
+  TaskLiveness,
   addComment,
   addRepo,
+  acceptInteraction,
   createAgent,
   createSkillSource,
   createTaskArtifact,
@@ -30,6 +34,7 @@ import {
   duplicateAgent,
   eventsURL,
   getAgent,
+  getTaskLiveness,
   getBootstrapStatus,
   getOrchestratorMap,
   getSkillContent,
@@ -39,6 +44,7 @@ import {
   heartbeat,
   listAgents,
   listComments,
+  listInteractions,
   listInstalledSkills,
   listProjects,
   listRunEvents,
@@ -46,9 +52,11 @@ import {
   listSkillSources,
   listTasks,
   listTaskArtifacts,
+  listWakeups,
   pinSkillSource,
   runBootstrap,
   runTask,
+  rejectInteraction,
   setAgentEnabled,
   setToken,
   syncSkillSource,
@@ -655,6 +663,9 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   const [comments, setComments] = useState<Comment[]>([]);
   const [artifacts, setArtifacts] = useState<TaskArtifact[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [wakeups, setWakeups] = useState<AgentWakeup[]>([]);
+  const [interactions, setInteractions] = useState<TaskInteraction[]>([]);
+  const [liveness, setLiveness] = useState<TaskLiveness | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [comment, setComment] = useState("");
   const [artifactForm, setArtifactForm] = useState<{ kind: TaskArtifact["kind"]; title: string; body: string; format: TaskArtifact["format"] }>({ kind: "pm_document", title: "", body: "", format: "markdown" });
@@ -664,6 +675,9 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     listComments(task.id).then(setComments);
     listTaskArtifacts(task.id).then(setArtifacts);
     listRuns(task.id).then(setRuns);
+    listWakeups(task.id).then(setWakeups);
+    listInteractions(task.id).then(setInteractions);
+    getTaskLiveness(task.id).then(setLiveness);
   }, [task.id]);
   useEffect(() => {
     if (!latestRun) return;
@@ -675,6 +689,18 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   }, [latestRun?.id, events]);
   async function refreshArtifacts() {
     setArtifacts(await listTaskArtifacts(task.id));
+  }
+  async function refreshControlPlane() {
+    const [nextRuns, nextWakeups, nextInteractions, nextLiveness] = await Promise.all([
+      listRuns(task.id),
+      listWakeups(task.id),
+      listInteractions(task.id),
+      getTaskLiveness(task.id),
+    ]);
+    setRuns(nextRuns);
+    setWakeups(nextWakeups);
+    setInteractions(nextInteractions);
+    setLiveness(nextLiveness);
   }
   async function submitArtifact(event: React.FormEvent) {
     event.preventDefault();
@@ -699,8 +725,23 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     <div className="drawer-header"><h2>{task.title}</h2><button onClick={onClose}>Close</button></div>
     <p>{task.description || "No description"}</p>
     <span>{agents.find((agent) => agent.id === task.assignee_agent_id)?.name || "Unassigned"} · {task.status} · {task.lifecycle_id || "default"} · retries {task.retry_count}</span>
+    <div className="tag-row"><span className={`liveness-${liveness?.liveness || "ready"}`}>{liveness?.liveness || "ready"}</span>{task.execution_state && <span>{task.execution_state}</span>}</div>
     {(task.tags || []).length > 0 && <div className="tag-row">{task.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-    <div className="toolbar"><button onClick={async () => { await runTask(task.id); await onRefresh(); setRuns(await listRuns(task.id)); }}><Play size={16} /> Run now</button></div>
+    <div className="toolbar"><button onClick={async () => { await runTask(task.id); await onRefresh(); await refreshControlPlane(); }}><Play size={16} /> Run now</button></div>
+    <h3>Interactions</h3>
+    <div className="runs">
+      {interactions.length === 0 && <p>No interactions yet.</p>}
+      {interactions.map((interaction) => (
+        <article key={interaction.id} className="artifact-item">
+          <div className="artifact-head"><strong>{interaction.title || interaction.kind}</strong><span>{interaction.kind} · {interaction.status} · {interaction.continuation_policy}</span></div>
+          {interaction.summary && <p>{interaction.summary}</p>}
+          {interaction.status === "open" && <div className="toolbar">
+            <button type="button" onClick={async () => { await acceptInteraction(interaction.id); await refreshControlPlane(); }}><Check size={16} /> Accept</button>
+            <button type="button" onClick={async () => { await rejectInteraction(interaction.id); await refreshControlPlane(); }}><Trash2 size={16} /> Reject</button>
+          </div>}
+        </article>
+      ))}
+    </div>
     <h3>Artifacts</h3>
     <div className="artifacts">
       {artifacts.length === 0 && <p>No artifacts yet.</p>}
@@ -753,8 +794,10 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     <h3>Comments</h3>
     <div className="timeline">{comments.map((item) => <p key={item.id}><strong>{item.author}</strong>: {item.body}</p>)}</div>
     <form className="comment-form" onSubmit={async (e) => { e.preventDefault(); await addComment(task.id, comment); setComment(""); setComments(await listComments(task.id)); }}><input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add comment" /><button><MessageSquare size={16} /> Comment</button></form>
+    <h3>Wakeups</h3>
+    <div className="runs">{wakeups.length === 0 ? <p>No wakeups yet.</p> : wakeups.map((wakeup) => <p key={wakeup.id}>{wakeup.status} · {wakeup.source} · {wakeup.reason} · coalesced {wakeup.coalesced_count}</p>)}</div>
     <h3>Runs</h3>
-    <div className="runs">{runs.map((run) => <p key={run.id}>{run.status} · {run.cli_kind} · {run.started_at || "not started"}</p>)}</div>
+    <div className="runs">{runs.map((run) => <p key={run.id}>{run.status} · {run.cli_kind} · wake {run.wakeup_id ? shortId(run.wakeup_id) : "legacy"} · {run.started_at || "not started"}</p>)}</div>
     <h3>Latest Log</h3>
     <pre>{events.map((event) => `[${event.level}] ${event.message}`).join("\n") || "No events yet."}</pre>
   </div>;

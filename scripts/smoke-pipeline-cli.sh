@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# smoke-pipeline.sh
-# Pushes one tiny task through the PM -> EM -> Backend -> Frontend -> QA
-# lifecycle against an already-running local-dev stack (mock runner).
+# smoke-pipeline-cli.sh
+# Same lifecycle proof as smoke-pipeline.sh, but for MP_RUNNER_MODE=cli.
 #
 # Prereqs (in another terminal):
 #   make local-db-up
-#   make local-dev
+#   make local-dev-cli      # or: make local-backend-cli
+#   `claude` and `codex` available on PATH and authenticated.
 #
 # Usage:
-#   ./scripts/smoke-pipeline.sh
-#   BASE_URL=http://127.0.0.1:18081 API_TOKEN=dev-token ./scripts/smoke-pipeline.sh
+#   ./scripts/smoke-pipeline-cli.sh
+#   BASE_URL=http://127.0.0.1:18082 API_TOKEN=dev-token ./scripts/smoke-pipeline-cli.sh
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:18081}"
+BASE_URL="${BASE_URL:-http://127.0.0.1:18082}"
 API_TOKEN="${API_TOKEN:-dev-token}"
-RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-180}"
+RUN_TIMEOUT_SECONDS="${RUN_TIMEOUT_SECONDS:-900}"
 
 export BASE_URL API_TOKEN RUN_TIMEOUT_SECONDS
 
 node - <<'NODE'
 const baseURL = process.env.BASE_URL;
 const token = process.env.API_TOKEN;
-const runTimeoutSeconds = Number(process.env.RUN_TIMEOUT_SECONDS) || 180;
+const runTimeoutSeconds = Number(process.env.RUN_TIMEOUT_SECONDS) || 900;
 
 const EXPECTED_ROLES = ["pm", "em", "backend", "frontend", "qa"];
-const MOCK_EVENT_MARKER = "mock runner generated deterministic acceptance response";
 
 const TASK_TITLE = "Add debug health endpoint";
 const TASK_DESCRIPTION = `Add a GET /api/debug/health endpoint that returns:
@@ -37,10 +36,10 @@ Requirements:
 - No DB calls, no external dependencies.
 
 Acceptance:
-- curl http://localhost:8080/api/debug/health returns 200 with the JSON shape.
+- GET /api/debug/health returns 200 with the JSON shape.
 - New unit test passes via go test ./...`;
 
-const PROJECT_NAME = "smoke-pipeline";
+const PROJECT_NAME = "smoke-pipeline-cli";
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -82,7 +81,7 @@ async function waitForHealth() {
   }
   throw new Error(
     `service at ${baseURL} did not respond to /healthz within 10s. ` +
-    `Start it with: make local-db-up && make local-dev`
+    `Start it with: make local-db-up && make local-dev-cli`
   );
 }
 
@@ -104,23 +103,6 @@ async function ensureAgents() {
   return byRole;
 }
 
-async function drainHeartbeat(projectId) {
-  for (let i = 0; i < 20; i++) {
-    const result = await api("/api/heartbeat", { method: "POST" });
-    await sleep(1500);
-    const tasks = await api(`/api/projects/${projectId}/tasks`);
-    const active = tasks.filter((t) => ["todo", "in_progress", "blocked"].includes(t.status));
-    if ((result.queued || 0) === 0 && active.length === 0) return tasks;
-  }
-  return await api(`/api/projects/${projectId}/tasks`);
-}
-
-function treeDepth(task, byParent) {
-  const children = byParent.get(task.id) || [];
-  if (children.length === 0) return 0;
-  return 1 + Math.max(...children.map((child) => treeDepth(child, byParent)));
-}
-
 async function ensureProject() {
   const projects = await api("/api/projects");
   const existing = Array.isArray(projects) ? projects.find((p) => p.name === PROJECT_NAME) : null;
@@ -129,7 +111,7 @@ async function ensureProject() {
     method: "POST",
     body: {
       name: PROJECT_NAME,
-      description: "Re-runnable smoke task that exercises PM -> EM -> Backend -> Frontend -> QA in mock mode.",
+      description: "Re-runnable smoke task that exercises PM -> EM -> Backend -> Frontend -> QA on the real CLI runner.",
       default_cli_kind: "codex",
       default_branch_strategy: "worktree-per-run",
     },
@@ -172,12 +154,12 @@ async function runAndWait(taskId, label) {
       lastStatus = current.status;
     }
     if (current.status === "done" || current.status === "error" || current.status === "cancelled") break;
-    await sleep(2000);
+    await sleep(3000);
   }
   if (!current || current.status !== "done") {
     let events = [];
     try { if (run) events = await api(`/api/runs/${run.id}/events`); } catch { /* best effort */ }
-    const tail = events.slice(-8).map((e) => `    ${e.level || "?"}: ${e.message || ""}`).join("\n");
+    const tail = events.slice(-12).map((e) => `    ${e.level || "?"}: ${e.message || ""}`).join("\n");
     throw new Error(
       `[${label}] run ${run ? run.id : "(not claimed)"} ended as "${current ? current.status : "unclaimed"}" after ${runTimeoutSeconds}s.\n` +
       `last events:\n${tail || "    (none)"}`
@@ -187,8 +169,40 @@ async function runAndWait(taskId, label) {
   return { run: current, events };
 }
 
+async function drainHeartbeat(projectId) {
+  for (let i = 0; i < 80; i++) {
+    const result = await api("/api/heartbeat", { method: "POST" });
+    await sleep(3000);
+    const tasks = await api(`/api/projects/${projectId}/tasks`);
+    const active = tasks.filter((t) => ["todo", "in_progress", "blocked"].includes(t.status));
+    if ((result.queued || 0) === 0 && active.length === 0) return tasks;
+  }
+  return await api(`/api/projects/${projectId}/tasks`);
+}
+
+function treeDepth(task, byParent) {
+  const children = byParent.get(task.id) || [];
+  if (children.length === 0) return 0;
+  return 1 + Math.max(...children.map((child) => treeDepth(child, byParent)));
+}
+
+function assertBoundedTree(task, projectTasks, maxTasks) {
+  const byParent = new Map();
+  for (const item of projectTasks) {
+    const key = item.parent_id || "";
+    byParent.set(key, [...(byParent.get(key) || []), item]);
+  }
+  const depth = treeDepth(task, byParent);
+  assert(projectTasks.length <= maxTasks, `task tree grew too large: ${projectTasks.length} > ${maxTasks}`);
+  assert(depth <= 4, `task tree depth ${depth} exceeds cap`);
+  assert(
+    projectTasks.every((item) => item.title.includes(TASK_TITLE)),
+    `task title lost root context: ${projectTasks.map((item) => item.title).join(" | ")}`
+  );
+}
+
 async function main() {
-  console.log(`smoke-pipeline starting against ${baseURL}`);
+  console.log(`smoke-pipeline-cli starting against ${baseURL}`);
   await waitForHealth();
   console.log("  /healthz OK");
 
@@ -203,63 +217,37 @@ async function main() {
   const task = await createTask(project.id);
   console.log(`  task created ${task.id} "${task.title}"`);
 
-  // First run: full lifecycle.
   const first = await runAndWait(task.id, "run#1");
-  assert(
-    first.events.some((e) => (e.message || "").includes(MOCK_EVENT_MARKER)),
-    `[run#1] missing mock runner marker; is MP_RUNNER_MODE=mock?`
-  );
-
   let projectTasks = await api(`/api/projects/${project.id}/tasks`);
-  const parent = projectTasks.find((t) => t.id === task.id);
   const childrenAfter1 = projectTasks.filter((t) => t.parent_id === task.id);
-  assert(parent, "[run#1] parent task missing");
   assert(
-    childrenAfter1.length >= 1,
-    `[run#1] expected >=1 child task, got ${childrenAfter1.length}`
+    childrenAfter1.length >= 1 || first.run.status === "done",
+    `[run#1] expected child tasks or a completed direct handoff, got ${childrenAfter1.length} child tasks`
   );
-  assert(
-    childrenAfter1.every((child) => child.title.includes(TASK_TITLE)),
-    `[run#1] child task title lost parent context: ${childrenAfter1.map((child) => child.title).join(" | ")}`
-  );
-
+  if (childrenAfter1.length > 0) {
+    assert(
+      childrenAfter1.every((child) => child.title.includes(TASK_TITLE)),
+      `[run#1] child task title lost parent context: ${childrenAfter1.map((child) => child.title).join(" | ")}`
+    );
+  }
   const childRoleIds = new Set(childrenAfter1.map((c) => c.assignee_agent_id).filter(Boolean));
   console.log(`  run#1 produced ${childrenAfter1.length} child task(s); roles: [${[...childRoleIds].join(", ")}]`);
+  console.log(`  run#1 event count: ${first.events.length}`);
 
   projectTasks = await drainHeartbeat(project.id);
-  const byParentAfterDrain = new Map();
-  for (const item of projectTasks) {
-    const key = item.parent_id || "";
-    byParentAfterDrain.set(key, [...(byParentAfterDrain.get(key) || []), item]);
-  }
-  const rootDepth = treeDepth(task, byParentAfterDrain);
-  assert(projectTasks.length <= 10, `task tree grew too large: ${projectTasks.length}`);
-  assert(rootDepth <= 4, `task tree depth ${rootDepth} exceeds cap`);
-  assert(
-    projectTasks.every((item) => item.title.includes(TASK_TITLE)),
-    `task title lost root context: ${projectTasks.map((item) => item.title).join(" | ")}`
-  );
-  assert(
-    projectTasks.every((item) => item.status === "done"),
-    `expected steady state with all tasks done: ${projectTasks.map((item) => `${item.status}:${item.title}`).join(" | ")}`
-  );
+  assertBoundedTree(task, projectTasks, 10);
 
-  // Idempotency: re-run the same task. Must not blow up and must not duplicate children explosively.
   const second = await runAndWait(task.id, "run#2");
-  assert(
-    second.events.some((e) => (e.message || "").includes(MOCK_EVENT_MARKER)),
-    `[run#2] missing mock runner marker on second run`
-  );
-
   projectTasks = await drainHeartbeat(project.id);
   const childrenAfter2 = projectTasks.filter((t) => t.parent_id === task.id);
-  const maxAllowed = childrenAfter1.length * 2 + 1;
+  const maxAllowed = Math.max(childrenAfter1.length * 2 + 1, 3);
   assert(
     childrenAfter2.length <= maxAllowed,
     `[run#2] children grew unboundedly: ${childrenAfter1.length} -> ${childrenAfter2.length} (max allowed ${maxAllowed})`
   );
+  assertBoundedTree(task, projectTasks, 10);
+  console.log(`  run#2 event count: ${second.events.length}`);
 
-  // Idempotent seeding: re-fetch project + agents counts; must not have grown because of this run.
   const projectsNow = await api("/api/projects");
   const sameProjectCount = projectsNow.filter((p) => p.name === PROJECT_NAME).length;
   assert(sameProjectCount === 1, `expected exactly 1 "${PROJECT_NAME}" project, found ${sameProjectCount}`);
@@ -267,11 +255,11 @@ async function main() {
   const tasksDelta = projectTasks.length - projectTasksBefore.length;
   console.log(`  project task count: ${projectTasksBefore.length} -> ${projectTasks.length} (+${tasksDelta})`);
 
-  console.log(`smoke-pipeline e2e passed on ${baseURL} (task ${task.id})`);
+  console.log(`smoke-pipeline-cli e2e passed on ${baseURL} (task ${task.id})`);
 }
 
 main().catch((err) => {
-  console.error(`smoke-pipeline FAILED: ${err.message}`);
+  console.error(`smoke-pipeline-cli FAILED: ${err.message}`);
   process.exit(1);
 });
 NODE

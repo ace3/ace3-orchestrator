@@ -6,6 +6,7 @@ import (
 
 	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/repoconfig"
+	"mini-paperclip/backend/internal/store"
 )
 
 type SkillDoc struct {
@@ -21,6 +22,10 @@ func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, commen
 }
 
 func BuildPromptWithSkillDocs(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact, skillDocs []SkillDoc) string {
+	return BuildPromptWithControlPlane(agent, task, repo, comments, artifacts, skillDocs, store.RunContext{})
+}
+
+func BuildPromptWithControlPlane(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact, skillDocs []SkillDoc, control store.RunContext) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== AGENT ===\nID: %s\nName: %s\nRole: %s\n\n", agent.ID, agent.Name, agent.Role)
 	fmt.Fprintf(&b, "=== ACTIVE SKILLS ===\n")
@@ -49,6 +54,7 @@ func BuildPromptWithSkillDocs(agent models.Agent, task models.Task, repo *models
 	if repo != nil {
 		fmt.Fprintf(&b, "\n=== WORKING REPO ===\n%s\nDefault branch: %s\n", repo.LocalPath, repo.DefaultBranch)
 	}
+	writeControlPlaneSection(&b, control)
 	fmt.Fprintf(&b, "\n=== RECENT COMMENTS ===\n")
 	for _, comment := range comments {
 		fmt.Fprintf(&b, "[%s] %s\n", comment.Author, comment.Body)
@@ -106,6 +112,59 @@ Routing notes:
 - Use "attachments" to persist PM docs, PM handoffs, EM docs, EM handoffs, QA reports, implementation notes, and run logs as durable task artifacts.
 - Legacy "file" and "log" attachments are accepted and stored as metadata-only artifacts when no body is provided.`)
 	return b.String()
+}
+
+func writeControlPlaneSection(b *strings.Builder, control store.RunContext) {
+	fmt.Fprintf(b, "\n=== CONTROL PLANE ===\n")
+	if control.Wakeup == nil {
+		b.WriteString("Wakeup: legacy run without wakeup context\n")
+	} else {
+		wakeup := control.Wakeup
+		fmt.Fprintf(b, "Wakeup ID: %s\nSource: %s\nReason: %s\nStatus: %s\nCoalesced count: %d\n", wakeup.ID, wakeup.Source, wakeup.Reason, wakeup.Status, wakeup.CoalescedCount)
+		if len(wakeup.PayloadJSON) > 0 {
+			fmt.Fprintf(b, "Payload: %s\n", truncateJSON(wakeup.PayloadJSON))
+		}
+		if len(wakeup.ContextSnapshot) > 0 {
+			fmt.Fprintf(b, "Context snapshot: %s\n", truncateJSON(wakeup.ContextSnapshot))
+		}
+	}
+	if control.RuntimeState == nil {
+		b.WriteString("Runtime state: none\n")
+	} else {
+		runtime := control.RuntimeState
+		sessionID := ""
+		if runtime.SessionID != nil {
+			sessionID = *runtime.SessionID
+		}
+		fmt.Fprintf(b, "Runtime adapter: %s\nRuntime session ID: %s\nLast run ID: %s\nLast run status: %s\nState: %s\n",
+			runtime.AdapterType, sessionID, deref(runtime.LastRunID), runtime.LastRunStatus, truncateJSON(runtime.StateJSON))
+	}
+	if len(control.RecentRuns) == 0 {
+		b.WriteString("Recent runs: none\n")
+		return
+	}
+	b.WriteString("Recent runs:\n")
+	for _, run := range control.RecentRuns {
+		fmt.Fprintf(b, "- %s status=%s cli=%s exit=%s tokens=%d/%d cost=%.6f\n", run.ID, run.Status, run.CLIKind, intPtrText(run.ExitCode), run.TokensIn, run.TokensOut, run.CostUSD)
+	}
+}
+
+func truncateJSON(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if len(text) > 2000 {
+		return text[:2000] + "\n[truncated]"
+	}
+	if text == "" {
+		return "{}"
+	}
+	return text
+}
+
+func intPtrText(value *int) string {
+	if value == nil {
+		return "n/a"
+	}
+	return fmt.Sprintf("%d", *value)
 }
 
 func writeSkillDocs(b *strings.Builder, skillDocs []SkillDoc) {

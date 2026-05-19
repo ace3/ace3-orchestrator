@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/store"
 )
 
 func TestParseAgentResponse(t *testing.T) {
@@ -124,5 +125,63 @@ func TestBuildPromptIncludesActiveSkillInstructions(t *testing.T) {
 		!strings.Contains(prompt, `"lifecycle_id":`) ||
 		!strings.Contains(prompt, "Use only the active skills and skill instructions embedded in this prompt") {
 		t.Fatalf("prompt did not include active skill instructions:\n%s", prompt)
+	}
+}
+
+func TestBuildPromptIncludesWakeupAndRuntimeContext(t *testing.T) {
+	sessionID := "session-1"
+	exitCode := 0
+	prompt := BuildPromptWithControlPlane(
+		models.Agent{ID: "backend", Name: "Backend Agent", Role: "backend"},
+		models.Task{ID: "task-1", Title: "Build API", Status: "todo"},
+		nil,
+		nil,
+		nil,
+		nil,
+		store.RunContext{
+			Wakeup: &models.AgentWakeup{
+				ID:              "wake-1",
+				Source:          "interaction",
+				Reason:          "interaction_accepted",
+				Status:          "running",
+				PayloadJSON:     []byte(`{"interaction_id":"interaction-1"}`),
+				ContextSnapshot: []byte(`{"wake_reason":"interaction_accepted"}`),
+			},
+			RuntimeState: &models.AgentRuntimeState{
+				AdapterType:   "codex",
+				SessionID:     &sessionID,
+				StateJSON:     []byte(`{"cwd":"/tmp/worktree"}`),
+				LastRunStatus: "done",
+			},
+			RecentRuns: []models.Run{{ID: "run-previous", Status: "done", CLIKind: "codex", ExitCode: &exitCode, TokensIn: 10, TokensOut: 5, CostUSD: 0.01}},
+		},
+	)
+	for _, want := range []string{"=== CONTROL PLANE ===", "Wakeup ID: wake-1", "Source: interaction", "interaction_accepted", "Runtime session ID: session-1", "Recent runs:", "run-previous"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestRunMetricsCapturesSessionID(t *testing.T) {
+	metrics := &runMetrics{}
+	metrics.observe(`{"session_id":"session-1","usage":{"input_tokens":3}}`)
+	if metrics.sessionID == nil || *metrics.sessionID != "session-1" {
+		t.Fatalf("session id was not captured: %+v", metrics.sessionID)
+	}
+}
+
+func TestRunMetricsCapturesClaudeAndCodexSessionFixtures(t *testing.T) {
+	fixtures := []string{
+		`{"type":"system","subtype":"init","session_id":"claude-session","model":"claude-sonnet-4-6"}`,
+		`{"type":"session_configured","thread_id":"codex-session","usage":{"input_tokens":10,"output_tokens":1}}`,
+	}
+	want := []string{"claude-session", "codex-session"}
+	for i, fixture := range fixtures {
+		metrics := &runMetrics{}
+		metrics.observe(fixture)
+		if metrics.sessionID == nil || *metrics.sessionID != want[i] {
+			t.Fatalf("fixture %d captured %v, want %s", i, metrics.sessionID, want[i])
+		}
 	}
 }
