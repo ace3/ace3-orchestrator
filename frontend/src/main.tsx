@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
 import "./styles.css";
@@ -454,15 +454,262 @@ function readAssigneeFilter(agents: Agent[]): AssigneeFilter {
   return agents.some((agent) => agent.id === value) ? value : "all";
 }
 
+function Modal({ open, onClose, title, children, footer }: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="modal-header">
+          <h3>{title}</h3>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <div className="modal-body">{children}</div>
+        {footer && <div className="modal-footer">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Menu({ open, onClose, children, align = "right" }: {
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+  align?: "right" | "left";
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+  if (!open) return null;
+  return <div ref={ref} className={`menu menu-${align}`} role="menu">{children}</div>;
+}
+
+type TaskFormValues = {
+  title: string;
+  description: string;
+  assignee_agent_id: string;
+  priority: number;
+  tags: string;
+  lifecycle_id: string;
+  status: Task["status"];
+};
+
+function TaskModal({ open, mode, initial, defaultStatus, agents, onClose, onSubmit }: {
+  open: boolean;
+  mode: "create" | "edit";
+  initial?: Partial<Task>;
+  defaultStatus?: Task["status"];
+  agents: Agent[];
+  onClose: () => void;
+  onSubmit: (values: TaskFormValues) => Promise<void>;
+}) {
+  const [values, setValues] = useState<TaskFormValues>({
+    title: "", description: "", assignee_agent_id: "pm", priority: 0, tags: "", lifecycle_id: "default", status: "todo",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setErr("");
+    setBusy(false);
+    setValues({
+      title: initial?.title || "",
+      description: initial?.description || "",
+      assignee_agent_id: initial?.assignee_agent_id || (agents[0]?.id ?? "pm"),
+      priority: initial?.priority ?? 0,
+      tags: (initial?.tags || []).join(", "),
+      lifecycle_id: initial?.lifecycle_id || "default",
+      status: (initial?.status as Task["status"]) || defaultStatus || "todo",
+    });
+  }, [open, initial, defaultStatus, agents]);
+
+  const title = mode === "edit"
+    ? "Edit task"
+    : defaultStatus
+      ? `Add task — ${STATUS_LABELS[defaultStatus]}`
+      : "Add task";
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!values.title.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onSubmit(values);
+      onClose();
+    } catch (e2) {
+      setErr((e2 as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={busy ? () => undefined : onClose}
+      title={title}
+      footer={
+        <>
+          <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="submit" form="task-modal-form" disabled={busy || !values.title.trim()}>
+            <Plus size={14} /> {mode === "edit" ? "Save changes" : "Create task"}
+          </button>
+        </>
+      }
+    >
+      <form id="task-modal-form" className="task-modal-form" onSubmit={submit}>
+        {err && <Error text={err} />}
+        <label className="field">
+          <span className="field-label">Title</span>
+          <input autoFocus placeholder="What needs to be done?" value={values.title} onChange={(e) => setValues({ ...values, title: e.target.value })} required />
+        </label>
+        <label className="field">
+          <span className="field-label">Description</span>
+          <textarea placeholder="Add more detail (optional)" value={values.description} onChange={(e) => setValues({ ...values, description: e.target.value })} style={{ minHeight: 92 }} />
+        </label>
+        <div className="task-modal-grid">
+          {mode === "edit" && (
+            <label className="field">
+              <span className="field-label">Status</span>
+              <select value={values.status} onChange={(e) => setValues({ ...values, status: e.target.value as Task["status"] })}>
+                {TASK_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="field">
+            <span className="field-label">Assignee</span>
+            <select value={values.assignee_agent_id} onChange={(e) => setValues({ ...values, assignee_agent_id: e.target.value })}>
+              {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Lifecycle</span>
+            <select value={values.lifecycle_id} onChange={(e) => setValues({ ...values, lifecycle_id: e.target.value })}>
+              <option value="default">Default</option>
+              <option value="backend-only">Backend only</option>
+              <option value="frontend-only">Frontend only</option>
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Priority</span>
+            <input type="number" min={0} max={10} value={values.priority} onChange={(e) => setValues({ ...values, priority: Number(e.target.value) || 0 })} />
+          </label>
+        </div>
+        <label className="field">
+          <span className="field-label">Tags</span>
+          <input placeholder="comma-separated" value={values.tags} onChange={(e) => setValues({ ...values, tags: e.target.value })} />
+        </label>
+      </form>
+    </Modal>
+  );
+}
+
+function CardMenu({ task, onEdit, onDuplicate, onMove, onDelete }: {
+  task: Task;
+  onEdit: () => void;
+  onDuplicate: () => void;
+  onMove: (status: Task["status"]) => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  function closeAll() { setOpen(false); setMoveOpen(false); setConfirmDel(false); }
+  return (
+    <div className="menu-anchor" onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="task-kebab" aria-label="Task actions" onClick={() => { setOpen((v) => !v); setMoveOpen(false); setConfirmDel(false); }}>
+        <MoreHorizontal size={14} />
+      </button>
+      <Menu open={open && !confirmDel} onClose={closeAll}>
+        <button type="button" onClick={() => { closeAll(); onEdit(); }}>Edit task</button>
+        <button type="button" onClick={() => { closeAll(); onDuplicate(); }}>Duplicate</button>
+        <button type="button" className="menu-sub-trigger" onClick={() => setMoveOpen((v) => !v)} aria-expanded={moveOpen}>
+          Move to <span aria-hidden="true">›</span>
+        </button>
+        {moveOpen && (
+          <div className="menu menu-sub-list">
+            {TASK_STATUSES.filter((s) => s !== task.status).map((s) => (
+              <button key={s} type="button" onClick={() => { closeAll(); onMove(s); }}>{STATUS_LABELS[s]}</button>
+            ))}
+          </div>
+        )}
+        <div className="sep" />
+        <button type="button" className="danger" onClick={() => setConfirmDel(true)}>Delete</button>
+      </Menu>
+      {confirmDel && (
+        <div className="menu menu-confirm" role="dialog" aria-label="Confirm delete">
+          <p>Delete this task?</p>
+          <div className="menu-confirm-actions">
+            <button type="button" onClick={closeAll}>Cancel</button>
+            <button type="button" className="danger-button" onClick={() => { closeAll(); onDelete(); }}>Delete</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColumnMenu({ collapsed, onAdd, onToggleCollapsed, onSort }: {
+  collapsed: boolean;
+  onAdd: () => void;
+  onToggleCollapsed: () => void;
+  onSort: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="menu-anchor">
+      <button type="button" className="col-action" aria-label="Column actions" onClick={() => setOpen((v) => !v)}>
+        <MoreHorizontal size={14} />
+      </button>
+      <Menu open={open} onClose={() => setOpen(false)}>
+        <button type="button" onClick={() => { setOpen(false); onAdd(); }}>Add task</button>
+        <button type="button" onClick={() => { setOpen(false); onToggleCollapsed(); }}>{collapsed ? "Expand column" : "Collapse column"}</button>
+        <button type="button" onClick={() => { setOpen(false); onSort(); }}>Sort by priority</button>
+      </Menu>
+    </div>
+  );
+}
+
 function BoardPage({ id }: { id: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [taskForm, setTaskForm] = useState({ title: "", description: "", assignee_agent_id: "pm", priority: 0, tags: "", lifecycle_id: "default" });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => readStatusFilter());
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
   const [error, setError] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"create" | "edit">("create");
+  const [modalInitial, setModalInitial] = useState<Partial<Task> | undefined>(undefined);
+  const [modalDefaultStatus, setModalDefaultStatus] = useState<Task["status"] | undefined>(undefined);
 
   useEffect(() => {
     getProject(id).then(setProject).catch((e) => setError(e.message));
@@ -514,57 +761,126 @@ function BoardPage({ id }: { id: string }) {
     setAssigneeFilter(nextAssignee);
   }
 
-  async function submitTask(event: React.FormEvent) {
-    event.preventDefault();
+  function openCreateModal(status?: Task["status"]) {
+    setModalMode("create");
+    setModalInitial(undefined);
+    setModalDefaultStatus(status);
+    setModalOpen(true);
+  }
+  function openEditModal(task: Task) {
+    setModalMode("edit");
+    setModalInitial(task);
+    setModalDefaultStatus(undefined);
+    setModalOpen(true);
+  }
+  async function submitModal(values: TaskFormValues) {
+    const current = project;
+    if (!current) return;
+    const tags = values.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
+    if (modalMode === "edit" && modalInitial?.id) {
+      const updated = await updateTask(modalInitial.id, {
+        ...modalInitial,
+        title: values.title,
+        description: values.description,
+        assignee_agent_id: values.assignee_agent_id || null,
+        priority: values.priority,
+        lifecycle_id: values.lifecycle_id,
+        tags,
+        status: values.status,
+      });
+      setTasks((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      if (selectedTask?.id === updated.id) setSelectedTask(updated);
+    } else {
+      const task = await createTask(current.id, {
+        title: values.title,
+        description: values.description,
+        assignee_agent_id: values.assignee_agent_id || null,
+        priority: values.priority,
+        lifecycle_id: values.lifecycle_id,
+        tags,
+        repo_id: current.repos?.[0]?.id || null,
+        status: values.status,
+      });
+      setTasks((prev) => [task, ...prev]);
+    }
+  }
+  async function duplicateTask(task: Task) {
     const current = project;
     if (!current) return;
     try {
-      const tags = taskForm.tags.split(",").map((tag) => tag.trim()).filter(Boolean);
-      const task = await createTask(current.id, { ...taskForm, tags, lifecycle_id: taskForm.lifecycle_id, assignee_agent_id: taskForm.assignee_agent_id || null, repo_id: current.repos?.[0]?.id || null, status: "todo" });
-      setTasks([task, ...tasks]);
-      setTaskForm({ title: "", description: "", assignee_agent_id: "pm", priority: 0, tags: "", lifecycle_id: "default" });
+      const copy = await createTask(current.id, {
+        title: `${task.title} (copy)`,
+        description: task.description,
+        assignee_agent_id: task.assignee_agent_id,
+        priority: task.priority,
+        lifecycle_id: task.lifecycle_id,
+        tags: task.tags,
+        repo_id: task.repo_id ?? (current.repos?.[0]?.id || null),
+        status: "todo",
+      });
+      setTasks((prev) => [copy, ...prev]);
+    } catch (e) { setError((e as Error).message); }
+  }
+  async function deleteTask(task: Task) {
+    try {
+      const updated = await updateTask(task.id, { ...task, status: "cancelled" });
+      setTasks((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      if (selectedTask?.id === updated.id) setSelectedTask(updated);
     } catch (e) { setError((e as Error).message); }
   }
   async function moveTask(task: Task, status: Task["status"]) {
-    const updated = await updateTask(task.id, { ...task, status });
-    setTasks(tasks.map((item) => item.id === updated.id ? updated : item));
-    if (selectedTask?.id === updated.id) setSelectedTask(updated);
+    try {
+      const updated = await updateTask(task.id, { ...task, status });
+      setTasks((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      if (selectedTask?.id === updated.id) setSelectedTask(updated);
+    } catch (e) { setError((e as Error).message); }
   }
 
   return <Panel title={`${project.name} Board`}>
     <Error text={error} />
-    <form className="task-form" onSubmit={submitTask}>
-      <input placeholder="New task title" value={taskForm.title} onChange={(e) => setTaskForm({ ...taskForm, title: e.target.value })} required />
-      <input placeholder="Description" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} />
-      <select value={taskForm.assignee_agent_id} onChange={(e) => setTaskForm({ ...taskForm, assignee_agent_id: e.target.value })}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select>
-      <select value={taskForm.lifecycle_id} onChange={(e) => setTaskForm({ ...taskForm, lifecycle_id: e.target.value })}>
-        <option value="default">Default</option>
-        <option value="backend-only">Backend only</option>
-        <option value="frontend-only">Frontend only</option>
-      </select>
-      <input placeholder="Tags, comma-separated" value={taskForm.tags} onChange={(e) => setTaskForm({ ...taskForm, tags: e.target.value })} />
-      <button><Plus size={16} /> Add task</button>
-      <button type="button" onClick={async () => { await heartbeat(); setTasks(await listTasks(project.id)); }}><RefreshCw size={16} /> Heartbeat</button>
-    </form>
-    <div className="board-filters" aria-label="Board filters">
-      <label>
-        <span>Status</span>
-        <select value={statusFilter} onChange={(e) => updateFilters(e.target.value as StatusFilter, assigneeFilter)}>
-          <option value="all">All statuses</option>
-          {TASK_STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABELS[status]}</option>)}
-        </select>
-      </label>
-      <label>
-        <span>Assignee</span>
-        <select value={assigneeFilter} onChange={(e) => updateFilters(statusFilter, e.target.value)}>
-          <option value="all">All assignees</option>
-          <option value="unassigned">Unassigned</option>
-          {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
-        </select>
-      </label>
+    <div className="board-toolbar">
+      <div className="board-filters" aria-label="Board filters">
+        <label>
+          <span>Status</span>
+          <select value={statusFilter} onChange={(e) => updateFilters(e.target.value as StatusFilter, assigneeFilter)}>
+            <option value="all">All statuses</option>
+            {TASK_STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABELS[status]}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>Assignee</span>
+          <select value={assigneeFilter} onChange={(e) => updateFilters(statusFilter, e.target.value)}>
+            <option value="all">All assignees</option>
+            <option value="unassigned">Unassigned</option>
+            {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="board-toolbar-actions">
+        <button type="button" onClick={async () => { await heartbeat(); setTasks(await listTasks(project.id)); }}><RefreshCw size={16} /> Heartbeat</button>
+        <button type="button" className="primary-button" onClick={() => openCreateModal("todo")}><Plus size={16} /> Add task</button>
+      </div>
     </div>
     {filtersActive && filteredTasks.length === 0 && <p className="filtered-empty">No tasks match the selected filters.</p>}
-    <Kanban tasks={filteredTasks} agents={agents} onOpen={setSelectedTask} onMove={moveTask} />
+    <Kanban
+      tasks={filteredTasks}
+      agents={agents}
+      onOpen={setSelectedTask}
+      onMove={moveTask}
+      onAddInColumn={(status) => openCreateModal(status)}
+      onEditTask={openEditModal}
+      onDuplicateTask={duplicateTask}
+      onDeleteTask={deleteTask}
+    />
+    <TaskModal
+      open={modalOpen}
+      mode={modalMode}
+      initial={modalInitial}
+      defaultStatus={modalDefaultStatus}
+      agents={agents}
+      onClose={() => setModalOpen(false)}
+      onSubmit={submitModal}
+    />
     {selectedTask && <TaskDrawer task={selectedTask} agents={agents} onClose={() => setSelectedTask(null)} onRefresh={async () => { setTasks(await listTasks(project.id)); setSelectedTask(await updateTask(selectedTask.id, selectedTask)); }} />}
   </Panel>;
 }
@@ -595,37 +911,69 @@ function shortId(id: string): string {
   return id.slice(0, 6).toUpperCase();
 }
 
-function Kanban({ tasks, agents, onOpen, onMove }: { tasks: Task[]; agents: Agent[]; onOpen: (task: Task) => void; onMove: (task: Task, status: Task["status"]) => void }) {
+function Kanban({ tasks, agents, onOpen, onMove, onAddInColumn, onEditTask, onDuplicateTask, onDeleteTask }: {
+  tasks: Task[];
+  agents: Agent[];
+  onOpen: (task: Task) => void;
+  onMove: (task: Task, status: Task["status"]) => void;
+  onAddInColumn: (status: Task["status"]) => void;
+  onEditTask: (task: Task) => void;
+  onDuplicateTask: (task: Task) => void;
+  onDeleteTask: (task: Task) => void;
+}) {
   const agentName = (id: string | null) => agents.find((agent) => agent.id === id)?.name || id || "Unassigned";
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [sortByPriority, setSortByPriority] = useState<Record<string, boolean>>({});
   return (
     <div className="kanban">
       {TASK_STATUSES.map((status) => {
+        const isCollapsed = !!collapsed[status];
         const items = tasks.filter((task) => task.status === status);
+        const ordered = sortByPriority[status]
+          ? [...items].sort((a, b) => (b.priority || 0) - (a.priority || 0))
+          : items;
         return (
-          <section className="column" key={status}>
+          <section
+            className={`column${isCollapsed ? " collapsed" : ""}`}
+            key={status}
+            onClick={isCollapsed ? () => setCollapsed((prev) => ({ ...prev, [status]: false })) : undefined}
+            title={isCollapsed ? "Expand column" : undefined}
+          >
             <header className="column-header">
               <span className={`col-icon status-${status}`} />
               <span className="col-name">{STATUS_LABELS[status]}</span>
               <span className="col-count">{items.length}</span>
-              <span className="spacer" />
-              <button type="button" className="col-action" aria-label="Column actions">
-                <MoreHorizontal size={14} />
-              </button>
-              <button type="button" className="col-action" aria-label="Add task to column">
-                <Plus size={14} />
-              </button>
+              {!isCollapsed && <>
+                <span className="spacer" />
+                <ColumnMenu
+                  collapsed={isCollapsed}
+                  onAdd={() => onAddInColumn(status)}
+                  onToggleCollapsed={() => setCollapsed((prev) => ({ ...prev, [status]: !prev[status] }))}
+                  onSort={() => setSortByPriority((prev) => ({ ...prev, [status]: !prev[status] }))}
+                />
+                <button type="button" className="col-action" aria-label="Add task to column" onClick={() => onAddInColumn(status)}>
+                  <Plus size={14} />
+                </button>
+              </>}
             </header>
-            <div className="column-body">
-              {items.length === 0 ? (
+            {!isCollapsed && <div className="column-body">
+              {ordered.length === 0 ? (
                 <div className="column-empty">No tasks</div>
               ) : (
-                items.map((task) => {
+                ordered.map((task) => {
                   const aName = agentName(task.assignee_agent_id);
                   return (
                     <article className="task-card" key={task.id} onClick={() => onOpen(task)}>
                       <div className="task-card-top">
                         <span className="task-id">TASK-{shortId(task.id)}</span>
                         <span className={`task-priority ${priorityClass(task.priority)}`}>P{task.priority}</span>
+                        <CardMenu
+                          task={task}
+                          onEdit={() => onEditTask(task)}
+                          onDuplicate={() => onDuplicateTask(task)}
+                          onMove={(s) => onMove(task, s)}
+                          onDelete={() => onDeleteTask(task)}
+                        />
                       </div>
                       <h3 className="task-title">{task.title}</h3>
                       {task.description && <p className="task-desc">{task.description}</p>}
@@ -651,7 +999,7 @@ function Kanban({ tasks, agents, onOpen, onMove }: { tasks: Task[]; agents: Agen
                   );
                 })
               )}
-            </div>
+            </div>}
           </section>
         );
       })}
