@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertTriangle, Bot, Boxes, Check, Database, Download, FileText, FolderGit2, GitBranch, Github, GripVertical, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, Bot, Boxes, Check, Copy, Database, Download, FileText, FolderGit2, GitBranch, Github, GripVertical, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2, Upload } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
@@ -54,6 +54,7 @@ import {
   getDefaultModel,
   getLifecycle,
   getLifecycleTagVocabulary,
+  getTask,
   getTaskLiveness,
   getBootstrapStatus,
   getOrchestratorMap,
@@ -581,6 +582,16 @@ function readAssigneeFilter(agents: Agent[]): AssigneeFilter {
   return agents.some((agent) => agent.id === value) ? value : "all";
 }
 
+function readTaskParam(): string | null {
+  return new URLSearchParams(window.location.search).get("task");
+}
+
+function taskShareURL(taskId: string): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set("task", taskId);
+  return url.toString();
+}
+
 function Modal({ open, onClose, title, children, footer }: {
   open: boolean;
   onClose: () => void;
@@ -885,6 +896,7 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
   const [lifecycles, setLifecycles] = useState<Lifecycle[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => readTaskParam());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => readStatusFilter());
   const [assigneeFilter, setAssigneeFilter] = useState<AssigneeFilter>("all");
   const [error, setError] = useState("");
@@ -908,13 +920,59 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
   }, [agents]);
 
   useEffect(() => {
-    function syncFiltersFromHistory() {
+    function syncFromHistory() {
+      const taskId = readTaskParam();
       setStatusFilter(readStatusFilter());
       setAssigneeFilter(readAssigneeFilter(agents));
+      setSelectedTaskId(taskId);
+      if (!taskId) setSelectedTask(null);
     }
-    window.addEventListener("popstate", syncFiltersFromHistory);
-    return () => window.removeEventListener("popstate", syncFiltersFromHistory);
+    window.addEventListener("popstate", syncFromHistory);
+    return () => window.removeEventListener("popstate", syncFromHistory);
   }, [agents]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function syncSelectedTask() {
+      if (!selectedTaskId) {
+        setSelectedTask(null);
+        return;
+      }
+      const localTask = tasks.find((task) => task.id === selectedTaskId);
+      if (localTask) {
+        if (localTask.project_id !== id) {
+          setError("Linked task does not belong to this project.");
+          setSelectedTask(null);
+          setSelectedTaskId(null);
+          writeTaskParam(null, true);
+          return;
+        }
+        setSelectedTask(localTask);
+        return;
+      }
+      try {
+        const task = await getTask(selectedTaskId);
+        if (cancelled) return;
+        if (task.project_id !== id) {
+          setError("Linked task does not belong to this project.");
+          setSelectedTask(null);
+          setSelectedTaskId(null);
+          writeTaskParam(null, true);
+          return;
+        }
+        setSelectedTask(task);
+        setTasks((prev) => prev.some((item) => item.id === task.id) ? prev.map((item) => item.id === task.id ? task : item) : [task, ...prev]);
+      } catch (e) {
+        if (cancelled) return;
+        setError((e as Error).message);
+        setSelectedTask(null);
+        setSelectedTaskId(null);
+        writeTaskParam(null, true);
+      }
+    }
+    syncSelectedTask();
+    return () => { cancelled = true; };
+  }, [id, selectedTaskId, tasks]);
 
   if (!project) return <Panel title="Board" breadcrumb={[{ label: "Projects", onClick: onOpenProjects }]}><Error text={error || "Loading..."} /></Panel>;
 
@@ -942,6 +1000,36 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
     window.history.pushState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
     setStatusFilter(nextStatus);
     setAssigneeFilter(nextAssignee);
+  }
+
+  function writeTaskParam(taskId: string | null, replace = false) {
+    const params = new URLSearchParams(window.location.search);
+    if (taskId) {
+      params.set("task", taskId);
+    } else {
+      params.delete("task");
+    }
+    const query = params.toString();
+    const nextPath = `${window.location.pathname}${query ? `?${query}` : ""}`;
+    if (`${window.location.pathname}${window.location.search}` !== nextPath) {
+      if (replace) {
+        window.history.replaceState(null, "", nextPath);
+      } else {
+        window.history.pushState(null, "", nextPath);
+      }
+    }
+  }
+
+  function openTask(task: Task) {
+    setSelectedTask(task);
+    setSelectedTaskId(task.id);
+    writeTaskParam(task.id);
+  }
+
+  function closeTask() {
+    setSelectedTask(null);
+    setSelectedTaskId(null);
+    writeTaskParam(null);
   }
 
   function openCreateModal(status?: Task["status"]) {
@@ -1055,7 +1143,7 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
     <Kanban
       tasks={filteredTasks}
       agents={agents}
-      onOpen={setSelectedTask}
+      onOpen={openTask}
       onMove={moveTask}
       onAddInColumn={(status) => openCreateModal(status)}
       onEditTask={openEditModal}
@@ -1072,7 +1160,7 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
       onClose={() => setModalOpen(false)}
       onSubmit={submitModal}
     />
-    {selectedTask && <TaskDrawer task={selectedTask} agents={agents} onClose={() => setSelectedTask(null)} onRefresh={async () => {
+    {selectedTask && <TaskDrawer task={selectedTask} agents={agents} onClose={closeTask} onRefresh={async () => {
       const nextTasks = await listTasks(project.id);
       setTasks(nextTasks);
       setSelectedTask(nextTasks.find((item) => item.id === selectedTask.id) || null);
@@ -1251,6 +1339,8 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   const [artifactForm, setArtifactForm] = useState<{ kind: TaskArtifact["kind"]; title: string; body: string; format: TaskArtifact["format"] }>({ kind: "pm_document", title: "", body: "", format: "markdown" });
   const [editingArtifact, setEditingArtifact] = useState<TaskArtifact | null>(null);
   const [interactionDrafts, setInteractionDrafts] = useState<Record<string, string>>({});
+  const [shareStatus, setShareStatus] = useState<"" | "copied" | "error">("");
+  const [shareFallbackUrl, setShareFallbackUrl] = useState("");
   const latestRun = runs[0];
   const hasOpenInteraction = interactions.some((interaction) => interaction.status === "open");
   const conversationItems = useMemo<ConversationItem[]>(() => {
@@ -1312,8 +1402,32 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     setEditingArtifact(null);
     await refreshArtifacts();
   }
+  async function shareTask() {
+    const url = taskShareURL(task.id);
+    setShareFallbackUrl("");
+    try {
+      if (!navigator.clipboard?.writeText) {
+        setShareStatus("error");
+        setShareFallbackUrl(url);
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      setShareStatus("copied");
+      window.setTimeout(() => setShareStatus(""), 1800);
+    } catch {
+      setShareStatus("error");
+      setShareFallbackUrl(url);
+    }
+  }
   return <div className="drawer">
-    <div className="drawer-header"><h2>{task.title}</h2><button onClick={onClose}>Close</button></div>
+    <div className="drawer-header">
+      <h2>{task.title}</h2>
+      <div className="drawer-header-actions">
+        <button type="button" onClick={shareTask} title="Copy task link"><Copy size={14} /> {shareStatus === "copied" ? "Copied" : "Share"}</button>
+        <button type="button" onClick={onClose}>Close</button>
+      </div>
+    </div>
+    {shareFallbackUrl && <div className="share-fallback"><input aria-label="Task share link" readOnly value={shareFallbackUrl} onFocus={(event) => event.currentTarget.select()} /></div>}
     <section className="drawer-summary">
       <p>{task.description || "No description"}</p>
       <div className="drawer-meta">
