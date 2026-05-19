@@ -229,11 +229,11 @@ function App() {
       <section>
         {route === "bootstrap" && <BootstrapPage bootstrapState={bootstrapState} onDone={(status) => { setBootstrapState({ phase: "ready", status }); navigate("projects"); }} />}
         {route === "projects" && <ProjectsPage openProject={(id) => navigate("project", id)} openBoard={(id) => navigate("board", id)} />}
-        {route === "project" && projectId && <ProjectPage id={projectId} onOpenBoard={() => navigate("board", projectId)} onDeleted={() => navigate("projects")} />}
-        {route === "board" && projectId && <BoardPage id={projectId} />}
+        {route === "project" && projectId && <ProjectPage id={projectId} onOpenBoard={() => navigate("board", projectId)} onOpenProjects={() => navigate("projects")} onDeleted={() => navigate("projects")} />}
+        {route === "board" && projectId && <BoardPage id={projectId} onOpenProjects={() => navigate("projects")} onOpenProject={() => navigate("project", projectId)} />}
         {route === "agents" && <AgentsPage openAgent={(id) => navigate("agent", id)} openAddAgent={() => navigate("agent-new")} />}
-        {route === "agent-new" && <AgentCreatePage onCreated={(id) => navigate("agent", id)} onCancel={() => navigate("agents")} />}
-        {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} />}
+        {route === "agent-new" && <AgentCreatePage onCreated={(id) => navigate("agent", id)} onCancel={() => navigate("agents")} onOpenAgents={() => navigate("agents")} />}
+        {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} onOpenAgents={() => navigate("agents")} />}
         {route === "skills" && <SkillSourcesPage />}
         {route === "map" && <MapPage />}
       </section>
@@ -273,42 +273,118 @@ function BootstrapPage({ bootstrapState, onDone }: { bootstrapState: BootstrapSt
   return <Panel title="Bootstrap"><p>{message}</p>{canRunBootstrap && <button onClick={run} disabled={busy}><Check size={16} /> Run bootstrap</button>}</Panel>;
 }
 
+function ProjectCreateModal({ open, onClose, onCreated }: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (project: Project) => void;
+}) {
+  const [values, setValues] = useState<Pick<Project, "name" | "description" | "default_cli_kind" | "default_branch_strategy">>({ name: "", description: "", default_cli_kind: "codex", default_branch_strategy: "worktree-per-run" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    setValues({ name: "", description: "", default_cli_kind: "codex", default_branch_strategy: "worktree-per-run" });
+    setBusy(false);
+    setErr("");
+  }, [open]);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!values.name.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const created = await createProject(values);
+      onCreated(created);
+      onClose();
+    } catch (e2) { setErr((e2 as Error).message); setBusy(false); }
+  }
+  return (
+    <Modal open={open} onClose={busy ? () => undefined : onClose} title="New project" footer={
+      <>
+        <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="submit" form="project-modal-form" disabled={busy || !values.name.trim()}><Plus size={14} /> Create project</button>
+      </>
+    }>
+      <form id="project-modal-form" className="task-modal-form" onSubmit={submit}>
+        {err && <Error text={err} />}
+        <label className="field">
+          <span className="field-label">Name</span>
+          <input autoFocus value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} placeholder="my-project" required />
+        </label>
+        <label className="field">
+          <span className="field-label">Description</span>
+          <textarea value={values.description} onChange={(e) => setValues({ ...values, description: e.target.value })} placeholder="Optional" style={{ minHeight: 80 }} />
+        </label>
+        <div className="task-modal-grid">
+          <label className="field">
+            <span className="field-label">Default CLI</span>
+            <select value={values.default_cli_kind} onChange={(e) => setValues({ ...values, default_cli_kind: e.target.value as "claude" | "codex" })}>
+              <option value="codex">codex</option>
+              <option value="claude">claude</option>
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Branch strategy</span>
+            <select value={values.default_branch_strategy} onChange={(e) => setValues({ ...values, default_branch_strategy: e.target.value as "worktree-per-run" | "shared" })}>
+              <option value="worktree-per-run">worktree-per-run</option>
+              <option value="shared">shared</option>
+            </select>
+          </label>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function ProjectsPage({ openProject, openBoard }: { openProject: (id: string) => void; openBoard: (id: string) => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [form, setForm] = useState<Pick<Project, "name" | "description" | "default_cli_kind" | "default_branch_strategy">>({ name: "", description: "", default_cli_kind: "codex", default_branch_strategy: "worktree-per-run" });
   const [error, setError] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
   useEffect(() => { listProjects().then(setProjects).catch((e) => setError(e.message)); }, []);
 
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    try {
-      const created = await createProject(form);
-      setProjects([created, ...projects]);
-      setForm({ ...form, name: "", description: "" });
-    } catch (e) { setError((e as Error).message); }
-  }
-
-  return <Panel title="Projects">
-    <form className="grid-form" onSubmit={submit}>
-      <input placeholder="Project name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-      <input placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-      <select value={form.default_cli_kind} onChange={(e) => setForm({ ...form, default_cli_kind: e.target.value as "claude" | "codex" })}><option>claude</option><option>codex</option></select>
-      <button><Plus size={16} /> Create</button>
-    </form>
+  return <Panel
+    title="Projects"
+    actions={<button type="button" className="primary-button" onClick={() => setAddOpen(true)}><Plus size={16} /> New project</button>}
+  >
     <Error text={error} />
-    <div className="list">{projects.map((project) => <article key={project.id}>
-      <h3>{project.name}</h3>
-      <p>{project.description || "No description"}</p>
-      <span>{project.default_cli_kind} · {project.repos?.length || 0} repos</span>
-      <div className="toolbar">
-        <button type="button" onClick={() => openProject(project.id)}><FolderGit2 size={16} /> Details</button>
-        <button type="button" onClick={() => openBoard(project.id)}><LayoutDashboard size={16} /> Board</button>
+    {projects.length === 0 ? (
+      <div className="empty-state source-empty">
+        <p><strong>No projects yet.</strong></p>
+        <p>A project groups repos, tasks, and agents under one board.</p>
+        <button type="button" className="primary-button" onClick={() => setAddOpen(true)}><Plus size={16} /> Create your first project</button>
       </div>
-    </article>)}</div>
+    ) : (
+      <div className="list">
+        {projects.map((project) => (
+          <article
+            key={project.id}
+            className="clickable project-row"
+            onClick={() => openBoard(project.id)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter") openBoard(project.id); }}
+          >
+            <div className="project-row-main">
+              <h3>{project.name}</h3>
+              <p>{project.description || "No description"}</p>
+              <span>{project.default_cli_kind} · {project.repos?.length || 0} repo{(project.repos?.length || 0) === 1 ? "" : "s"}</span>
+            </div>
+            <div className="project-row-actions" onClick={(e) => e.stopPropagation()}>
+              <button type="button" onClick={() => openProject(project.id)} title="Edit project details"><FolderGit2 size={14} /> Edit</button>
+            </div>
+          </article>
+        ))}
+      </div>
+    )}
+    <ProjectCreateModal
+      open={addOpen}
+      onClose={() => setAddOpen(false)}
+      onCreated={(p) => setProjects((prev) => [p, ...prev])}
+    />
   </Panel>;
 }
 
-function ProjectPage({ id, onOpenBoard, onDeleted }: { id: string; onOpenBoard: () => void; onDeleted: () => void }) {
+function ProjectPage({ id, onOpenBoard, onOpenProjects, onDeleted }: { id: string; onOpenBoard: () => void; onOpenProjects: () => void; onDeleted: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [repoPath, setRepoPath] = useState("");
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
@@ -317,7 +393,7 @@ function ProjectPage({ id, onOpenBoard, onDeleted }: { id: string; onOpenBoard: 
   useEffect(() => {
     getProject(id).then(setProject).catch((e) => setError(e.message));
   }, [id]);
-  if (!project) return <Panel title="Project"><Error text={error || "Loading..."} /></Panel>;
+  if (!project) return <Panel title="Project" breadcrumb={[{ label: "Projects", onClick: onOpenProjects }]}><Error text={error || "Loading..."} /></Panel>;
 
   async function save() {
     const current = project;
@@ -349,7 +425,11 @@ function ProjectPage({ id, onOpenBoard, onDeleted }: { id: string; onOpenBoard: 
 
   const repoCount = project.repos?.length || 0;
 
-  return <Panel title={project.name}>
+  return <Panel
+    title={project.name}
+    breadcrumb={[{ label: "Projects", onClick: onOpenProjects }]}
+    actions={<button type="button" className="primary-button" onClick={onOpenBoard}><LayoutDashboard size={16} /> Open board</button>}
+  >
     <Error text={error} />
 
     <section className="detail-card">
@@ -698,7 +778,7 @@ function ColumnMenu({ collapsed, onAdd, onToggleCollapsed, onSort }: {
   );
 }
 
-function BoardPage({ id }: { id: string }) {
+function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenProjects: () => void; onOpenProject: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -733,7 +813,7 @@ function BoardPage({ id }: { id: string }) {
     return () => window.removeEventListener("popstate", syncFiltersFromHistory);
   }, [agents]);
 
-  if (!project) return <Panel title="Board"><Error text={error || "Loading..."} /></Panel>;
+  if (!project) return <Panel title="Board" breadcrumb={[{ label: "Projects", onClick: onOpenProjects }]}><Error text={error || "Loading..."} /></Panel>;
 
   const filteredTasks = tasks.filter((task) => {
     if (statusFilter !== "all" && task.status !== statusFilter) return false;
@@ -836,7 +916,13 @@ function BoardPage({ id }: { id: string }) {
     } catch (e) { setError((e as Error).message); }
   }
 
-  return <Panel title={`${project.name} Board`}>
+  return <Panel
+    title="Board"
+    breadcrumb={[
+      { label: "Projects", onClick: onOpenProjects },
+      { label: project.name, onClick: onOpenProject },
+    ]}
+  >
     <Error text={error} />
     <div className="board-toolbar">
       <div className="board-filters" aria-label="Board filters">
@@ -857,6 +943,7 @@ function BoardPage({ id }: { id: string }) {
         </label>
       </div>
       <div className="board-toolbar-actions">
+        <button type="button" onClick={onOpenProject} title="Edit project details"><FolderGit2 size={16} /> Edit project</button>
         <button type="button" onClick={async () => { await heartbeat(); setTasks(await listTasks(project.id)); }}><RefreshCw size={16} /> Heartbeat</button>
         <button type="button" className="primary-button" onClick={() => openCreateModal("todo")}><Plus size={16} /> Add task</button>
       </div>
@@ -1212,7 +1299,7 @@ function AgentsPage({ openAgent, openAddAgent }: { openAgent: (id: string) => vo
   </Panel>;
 }
 
-function AgentCreatePage({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
+function AgentCreatePage({ onCreated, onCancel, onOpenAgents }: { onCreated: (id: string) => void; onCancel: () => void; onOpenAgents: () => void }) {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
@@ -1264,7 +1351,7 @@ function AgentCreatePage({ onCreated, onCancel }: { onCreated: (id: string) => v
     }
   }
 
-  return <Panel title="Add Agent">
+  return <Panel title="Add Agent" breadcrumb={[{ label: "Agents", onClick: onOpenAgents }]}>
     <form className="editor" onSubmit={submit}>
       <h2 className="section-title">Agent</h2>
       <div className="form-grid">
@@ -1288,7 +1375,7 @@ function AgentCreatePage({ onCreated, onCancel }: { onCreated: (id: string) => v
   </Panel>;
 }
 
-function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) => void }) {
+function AgentDetailPage({ id, onSaved, onOpenAgents }: { id: string; onSaved: (id: string) => void; onOpenAgents: () => void }) {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [map, setMap] = useState<OrchestratorMap | null>(null);
@@ -1305,7 +1392,7 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
       .catch((e) => setError(e.message));
   }, [id]);
 
-  if (!agent) return <Panel title="Agent"><Error text={error || "Loading..."} /></Panel>;
+  if (!agent) return <Panel title="Agent" breadcrumb={[{ label: "Agents", onClick: onOpenAgents }]}><Error text={error || "Loading..."} /></Panel>;
   const recommendedSkillNames = recommendationNamesForAgent(map, agent.id);
 
   async function save() {
@@ -1335,7 +1422,7 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
     if (agent) setAgent({ ...agent, skills: nextSkills });
   }
 
-  return <Panel title={agent.name}>
+  return <Panel title={agent.name} breadcrumb={[{ label: "Agents", onClick: onOpenAgents }]}>
     <div className="editor">
       <input value={agent.name} onChange={(e) => setAgent({ ...agent, name: e.target.value })} aria-label="Agent name" />
       <input value={agent.role} onChange={(e) => setAgent({ ...agent, role: e.target.value })} aria-label="Agent role" />
@@ -1936,8 +2023,37 @@ function MapPage() {
   </Panel>;
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return <div className="panel"><h1>{title}</h1>{children}</div>;
+type Crumb = { label: string; onClick?: () => void };
+
+function Panel({ title, children, breadcrumb, actions }: {
+  title: string;
+  children: React.ReactNode;
+  breadcrumb?: Crumb[];
+  actions?: React.ReactNode;
+}) {
+  return (
+    <div className="panel">
+      {breadcrumb && breadcrumb.length > 0 && (
+        <nav className="breadcrumb" aria-label="Breadcrumb">
+          {breadcrumb.map((crumb, i) => (
+            <React.Fragment key={i}>
+              {crumb.onClick ? (
+                <button type="button" className="crumb-link" onClick={crumb.onClick}>{crumb.label}</button>
+              ) : (
+                <span className="crumb-text">{crumb.label}</span>
+              )}
+              <span className="crumb-sep" aria-hidden="true">›</span>
+            </React.Fragment>
+          ))}
+        </nav>
+      )}
+      <div className="panel-header">
+        <h1>{title}</h1>
+        {actions && <div className="panel-actions">{actions}</div>}
+      </div>
+      {children}
+    </div>
+  );
 }
 
 function Error({ text }: { text: string }) {

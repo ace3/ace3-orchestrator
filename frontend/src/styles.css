@@ -308,6 +308,66 @@ aside > button:hover svg, aside > button.active svg { color: var(--text-muted); 
 /* ---------- Layout ---------- */
 .panel { max-width: 1240px; margin: 0 auto; }
 
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: -0.002em;
+}
+.breadcrumb .crumb-link {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 2px 6px !important;
+  min-height: 0 !important;
+  border-radius: 4px !important;
+  color: var(--text-muted) !important;
+  font-weight: 400 !important;
+  font-size: 12px !important;
+  cursor: pointer;
+}
+.breadcrumb .crumb-link:hover {
+  background: var(--bg-hover) !important;
+  color: var(--text) !important;
+}
+.breadcrumb .crumb-text {
+  padding: 2px 6px;
+  color: var(--text);
+  font-weight: 500;
+}
+.breadcrumb .crumb-sep {
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 0 2px;
+  user-select: none;
+}
+.breadcrumb > :last-child.crumb-sep { display: none; }
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 22px;
+}
+.panel-header h1 { margin: 0; }
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.panel-actions .primary-button {
+  background: var(--accent) !important;
+  color: var(--accent-on) !important;
+  border-color: transparent !important;
+}
+.panel-actions .primary-button:hover { background: var(--accent-hover) !important; }
+
 h1 {
   font-size: 18px;
   font-weight: 600;
@@ -1369,6 +1429,38 @@ pre {
   border: 2px solid var(--bg-board);
 }
 *::-webkit-scrollbar-thumb:hover { background: var(--border-focus); }
+
+/* ---------- Project list rows ---------- */
+.project-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+}
+.project-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.project-row-main h3 { margin: 0; }
+.project-row-main p { margin: 0; color: var(--text-muted); font-size: 12.5px; }
+.project-row-main span { color: var(--text-dim); font-size: 11.5px; }
+.project-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.project-row-actions button {
+  background: var(--bg-elevated) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+.project-row-actions button:hover {
+  background: var(--bg-hover) !important;
+  border-color: var(--border-strong) !important;
+}
 
 /* ---------- Skill sources page ---------- */
 .source-stats {
