@@ -28,5 +28,13 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-INSERT INTO app_settings (key, value) VALUES ('default_model', 'claude-sonnet-4-6')
+INSERT INTO app_settings (key, value) VALUES ('default_model', 'gpt-5.3-codex')
+ON CONFLICT (key) DO NOTHING;
+INSERT INTO app_settings (key, value) VALUES ('default_codex_model', 'gpt-5.3-codex')
+ON CONFLICT (key) DO NOTHING;
+INSERT INTO app_settings (key, value) VALUES ('planning_codex_model', 'gpt-5.5')
+ON CONFLICT (key) DO NOTHING;
+INSERT INTO app_settings (key, value) VALUES ('default_claude_model', 'claude-sonnet-4-6')
+ON CONFLICT (key) DO NOTHING;
+INSERT INTO app_settings (key, value) VALUES ('planning_claude_model', 'claude-opus-4-7')
 ON CONFLICT (key) DO NOTHING;

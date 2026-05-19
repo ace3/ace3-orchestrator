@@ -11,7 +11,17 @@ import (
 	"mini-paperclip/backend/internal/store"
 )
 
-const DefaultModelSetting = "default_model"
+const (
+	DefaultModelSetting        = "default_model"
+	DefaultCodexModelSetting   = "default_codex_model"
+	PlanningCodexModelSetting  = "planning_codex_model"
+	DefaultClaudeModelSetting  = "default_claude_model"
+	PlanningClaudeModelSetting = "planning_claude_model"
+	DefaultCodexModel          = "gpt-5.3-codex"
+	PlanningCodexModel         = "gpt-5.5"
+	DefaultClaudeModel         = "claude-sonnet-4-6"
+	PlanningClaudeModel        = "claude-opus-4-7"
+)
 
 type Service struct {
 	store *store.Store
@@ -88,7 +98,7 @@ func (s *Service) RemainingSteps(ctx context.Context, lifecycleID, currentAgent 
 	return out, nil
 }
 
-func (s *Service) ModelForStep(ctx context.Context, lifecycleID, agentID string) (string, error) {
+func (s *Service) ModelForStep(ctx context.Context, lifecycleID, agentID, cliKind string) (string, error) {
 	lifecycle, err := s.lifecycle(ctx, lifecycleID)
 	if err != nil {
 		return "", err
@@ -98,7 +108,7 @@ func (s *Service) ModelForStep(ctx context.Context, lifecycleID, agentID string)
 			return strings.TrimSpace(step.ModelID), nil
 		}
 	}
-	return s.defaultModel(ctx)
+	return s.defaultModel(ctx, cliKind, agentID)
 }
 
 func (s *Service) CLIKindForStep(ctx context.Context, lifecycleID, agentID string) (string, error) {
@@ -138,7 +148,7 @@ func (s *Service) TagVocabulary(ctx context.Context, lifecycleID string) ([]stri
 }
 
 func (s *Service) DefaultModel(ctx context.Context) (string, error) {
-	return s.defaultModel(ctx)
+	return s.defaultModel(ctx, "codex", "")
 }
 
 func (s *Service) lifecycle(ctx context.Context, lifecycleID string) (models.Lifecycle, error) {
@@ -148,12 +158,38 @@ func (s *Service) lifecycle(ctx context.Context, lifecycleID string) (models.Lif
 	return s.store.GetLifecycle(ctx, lifecycleID)
 }
 
-func (s *Service) defaultModel(ctx context.Context) (string, error) {
-	value, err := s.store.GetSetting(ctx, DefaultModelSetting)
+func (s *Service) defaultModel(ctx context.Context, cliKind, agentID string) (string, error) {
+	key, fallback := defaultModelSetting(cliKind, agentID)
+	value, err := s.store.GetSetting(ctx, key)
 	if errors.Is(err, store.ErrNotFound) {
-		return "claude-sonnet-4-6", nil
+		return fallback, nil
 	}
 	return value, err
+}
+
+func defaultModelSetting(cliKind, agentID string) (string, string) {
+	planning := isPlanningAgent(agentID)
+	switch strings.ToLower(strings.TrimSpace(cliKind)) {
+	case "claude":
+		if planning {
+			return PlanningClaudeModelSetting, PlanningClaudeModel
+		}
+		return DefaultClaudeModelSetting, DefaultClaudeModel
+	default:
+		if planning {
+			return PlanningCodexModelSetting, PlanningCodexModel
+		}
+		return DefaultCodexModelSetting, DefaultCodexModel
+	}
+}
+
+func isPlanningAgent(agentID string) bool {
+	switch strings.ToLower(strings.TrimSpace(agentID)) {
+	case "pm", "em":
+		return true
+	default:
+		return false
+	}
 }
 
 func runnable(step models.LifecycleStep, tags map[string]bool) bool {

@@ -63,9 +63,9 @@ func (a *API) lifecycleTagVocabulary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getDefaultModel(w http.ResponseWriter, r *http.Request) {
-	value, err := a.store.GetSetting(r.Context(), lifecycles.DefaultModelSetting)
+	value, err := a.store.GetSetting(r.Context(), lifecycles.DefaultCodexModelSetting)
 	if errors.Is(err, store.ErrNotFound) {
-		value, err = a.store.SetSetting(r.Context(), lifecycles.DefaultModelSetting, "claude-sonnet-4-6")
+		value, err = a.store.SetSetting(r.Context(), lifecycles.DefaultCodexModelSetting, lifecycles.DefaultCodexModel)
 	}
 	respond(w, map[string]string{"value": value}, err)
 }
@@ -78,6 +78,6 @@ func (a *API) setDefaultModel(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	value, err := a.store.SetSetting(r.Context(), lifecycles.DefaultModelSetting, body.Value)
+	value, err := a.store.SetSetting(r.Context(), lifecycles.DefaultCodexModelSetting, body.Value)
 	respond(w, map[string]string{"value": value}, err)
 }

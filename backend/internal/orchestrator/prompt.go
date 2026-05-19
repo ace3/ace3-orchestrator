@@ -129,8 +129,8 @@ Routing notes:
 - Use "tags" and "lifecycle_id" to make the lifecycle skip irrelevant steps when the task is clearly backend-only, frontend-only, already planned, or does not need QA.
 - If you omit "reassign_to" and set status to "done", the task auto-advances to
   the next non-skipped step shown under "PLANNED REMAINING STEPS" below.
-- Use "request_human_review" when you need a human to inspect before advancing.
 - Use "human_interactions" when you cannot continue without a human answer or approval. The orchestrator will set the task to waiting and wake you after the human responds.
+- Use "request_human_review" only when you need a generic approval stop and did not create a richer human_interactions item. The orchestrator will convert it to an approval interaction.
 - Use "attachments" to persist PM docs, PM handoffs, EM docs, EM handoffs, QA reports, implementation notes, and run logs as durable task artifacts.
 - Legacy "file" and "log" attachments are accepted and stored as metadata-only artifacts when no body is provided.`)
 	return b.String()

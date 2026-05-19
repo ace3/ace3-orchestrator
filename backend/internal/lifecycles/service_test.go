@@ -76,7 +76,7 @@ func TestNextAgentTreatsMissingIncludeTagAsInactive(t *testing.T) {
 	}
 }
 
-func TestModelForStepFallsBackToDefaultModel(t *testing.T) {
+func TestModelForStepUsesCLIModelDefaults(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -85,15 +85,87 @@ func TestModelForStepFallsBackToDefaultModel(t *testing.T) {
 
 	expectLifecycle(mock, "default", []testStep{{id: "s1", agent: "backend"}})
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT value FROM app_settings WHERE key=$1")).
-		WithArgs(DefaultModelSetting).
-		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("claude-opus-4-6"))
+		WithArgs(DefaultCodexModelSetting).
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("gpt-5.3-codex"))
 
 	service := New(store.New(sqlx.NewDb(rawDB, "sqlmock"), nil))
-	model, err := service.ModelForStep(context.Background(), "default", "backend")
+	model, err := service.ModelForStep(context.Background(), "default", "backend", "codex")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model != "claude-opus-4-6" {
+	if model != "gpt-5.3-codex" {
+		t.Fatalf("got model %q", model)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModelForStepUsesPlanningModelForPlanningAgents(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	expectLifecycle(mock, "default", []testStep{{id: "s1", agent: "em"}})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT value FROM app_settings WHERE key=$1")).
+		WithArgs(PlanningCodexModelSetting).
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("gpt-5.5"))
+
+	service := New(store.New(sqlx.NewDb(rawDB, "sqlmock"), nil))
+	model, err := service.ModelForStep(context.Background(), "default", "em", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "gpt-5.5" {
+		t.Fatalf("got model %q", model)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModelForStepUsesClaudePlanningModel(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	expectLifecycle(mock, "default", []testStep{{id: "s1", agent: "pm"}})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT value FROM app_settings WHERE key=$1")).
+		WithArgs(PlanningClaudeModelSetting).
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("claude-opus-4-7"))
+
+	service := New(store.New(sqlx.NewDb(rawDB, "sqlmock"), nil))
+	model, err := service.ModelForStep(context.Background(), "default", "pm", "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "claude-opus-4-7" {
+		t.Fatalf("got model %q", model)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModelForStepKeepsExplicitStepOverride(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	expectLifecycle(mock, "default", []testStep{{id: "s1", agent: "backend", model: "custom-model"}})
+
+	service := New(store.New(sqlx.NewDb(rawDB, "sqlmock"), nil))
+	model, err := service.ModelForStep(context.Background(), "default", "backend", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "custom-model" {
 		t.Fatalf("got model %q", model)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

@@ -1120,6 +1120,29 @@ function interactionResolutionText(interaction: TaskInteraction): string {
   return "";
 }
 
+function compactDate(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function conversationAuthor(author: string): string {
+  if (author.startsWith("agent:")) return author.replace("agent:", "Agent ");
+  if (author.startsWith("human:")) return author.replace("human:", "Human ");
+  return author;
+}
+
+function conversationClass(author: string): string {
+  if (author.startsWith("human:")) return "from-human";
+  if (author.startsWith("agent:")) return "from-agent";
+  return "from-system";
+}
+
+type ConversationItem =
+  | { id: string; kind: "comment"; createdAt: string; author: string; body: string }
+  | { id: string; kind: "interaction"; createdAt: string; interaction: TaskInteraction };
+
 function Kanban({ tasks, agents, onOpen, onMove, onAddInColumn, onEditTask, onDuplicateTask, onDeleteTask }: {
   tasks: Task[];
   agents: Agent[];
@@ -1230,6 +1253,12 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   const [interactionDrafts, setInteractionDrafts] = useState<Record<string, string>>({});
   const latestRun = runs[0];
   const hasOpenInteraction = interactions.some((interaction) => interaction.status === "open");
+  const conversationItems = useMemo<ConversationItem[]>(() => {
+    return [
+      ...comments.map((item) => ({ id: `comment:${item.id}`, kind: "comment" as const, createdAt: item.created_at, author: item.author, body: item.body })),
+      ...interactions.map((interaction) => ({ id: `interaction:${interaction.id}`, kind: "interaction" as const, createdAt: interaction.created_at, interaction })),
+    ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [comments, interactions]);
   useEffect(() => {
     listComments(task.id).then(setComments);
     listTaskArtifacts(task.id).then(setArtifacts);
@@ -1285,118 +1314,149 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   }
   return <div className="drawer">
     <div className="drawer-header"><h2>{task.title}</h2><button onClick={onClose}>Close</button></div>
-    <p>{task.description || "No description"}</p>
-    <span>{agents.find((agent) => agent.id === task.assignee_agent_id)?.name || "Unassigned"} · {task.status} · {task.lifecycle_id || "default"} · retries {task.retry_count}</span>
-    <div className="tag-row"><span className={`liveness-${liveness?.liveness || "ready"}`}>{liveness?.liveness || "ready"}</span>{task.execution_state && <span>{task.execution_state}</span>}</div>
-    {(task.tags || []).length > 0 && <div className="tag-row">{task.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-    <div className="toolbar">
-      <button
-        onClick={async () => { await runTask(task.id); await onRefresh(); await refreshControlPlane(); }}
-        disabled={hasOpenInteraction}
-        title={hasOpenInteraction ? "Answer open interaction before running" : "Run task now"}
-      ><Play size={16} /> Run now</button>
-    </div>
-    <h3>Interactions</h3>
-    <div className="runs">
-      {interactions.length === 0 && <p>No interactions yet.</p>}
-      {interactions.map((interaction) => (
-        <article key={interaction.id} className={`artifact-item interaction-item ${interaction.status === "open" ? "open" : ""}`}>
-          <div className="artifact-head"><strong>{interaction.title || interaction.kind}</strong><span>{interaction.kind} · {interaction.status} · {interaction.continuation_policy}</span></div>
-          {interaction.summary && <p>{interaction.summary}</p>}
-          {interactionQuestion(interaction) && <p className="interaction-question">{interactionQuestion(interaction)}</p>}
-          {interaction.status !== "open" && interactionResolutionText(interaction) && <p className="interaction-resolution">{interactionResolutionText(interaction)}</p>}
-          {interaction.status === "open" && interaction.kind === "ask_user_questions" && (
-            <form className="interaction-form" onSubmit={async (event) => {
-              event.preventDefault();
-              const response = (interactionDrafts[interaction.id] || "").trim();
-              if (!response) return;
-              await answerInteraction(interaction.id, response);
-              setInteractionDrafts((current) => ({ ...current, [interaction.id]: "" }));
-              await refreshControlPlane();
-            }}>
-              <textarea
-                value={interactionDrafts[interaction.id] || ""}
-                onChange={(event) => setInteractionDrafts((current) => ({ ...current, [interaction.id]: event.target.value }))}
-                placeholder="Answer required"
-                required
-              />
-              <button type="submit"><MessageSquare size={16} /> Answer</button>
-            </form>
-          )}
-          {interaction.status === "open" && interaction.kind !== "ask_user_questions" && (
-            <form className="interaction-form" onSubmit={(event) => event.preventDefault()}>
-              <textarea
-                value={interactionDrafts[interaction.id] || ""}
-                onChange={(event) => setInteractionDrafts((current) => ({ ...current, [interaction.id]: event.target.value }))}
-                placeholder="Optional note"
-              />
-              <div className="toolbar">
-                <button type="button" onClick={async () => { await acceptInteraction(interaction.id, interactionDrafts[interaction.id] || ""); await refreshControlPlane(); }}><Check size={16} /> Accept</button>
-                <button type="button" onClick={async () => { await rejectInteraction(interaction.id, interactionDrafts[interaction.id] || ""); await refreshControlPlane(); }}><Trash2 size={16} /> Reject</button>
-              </div>
-            </form>
-          )}
-        </article>
-      ))}
-    </div>
-    <h3>Artifacts</h3>
-    <div className="artifacts">
-      {artifacts.length === 0 && <p>No artifacts yet.</p>}
-      {artifacts.map((artifact) => (
-        <article key={artifact.id} className="artifact-item">
-          {editingArtifact?.id === artifact.id ? (
-            <form className="artifact-form" onSubmit={saveArtifact}>
-              <div className="artifact-grid">
-                <select value={editingArtifact.kind} onChange={(e) => setEditingArtifact({ ...editingArtifact, kind: e.target.value as TaskArtifact["kind"] })}>
-                  {ARTIFACT_KINDS.map((kind) => <option key={kind} value={kind}>{ARTIFACT_LABELS[kind]}</option>)}
-                </select>
-                <select value={editingArtifact.format} onChange={(e) => setEditingArtifact({ ...editingArtifact, format: e.target.value as TaskArtifact["format"] })}>
-                  <option value="markdown">Markdown</option>
-                  <option value="text">Text</option>
-                  <option value="json">JSON</option>
-                </select>
-              </div>
-              <input value={editingArtifact.title} onChange={(e) => setEditingArtifact({ ...editingArtifact, title: e.target.value })} required />
-              <textarea value={editingArtifact.body} onChange={(e) => setEditingArtifact({ ...editingArtifact, body: e.target.value })} />
-              <div className="toolbar"><button><Save size={16} /> Save</button><button type="button" onClick={() => setEditingArtifact(null)}>Cancel</button></div>
-            </form>
-          ) : (
-            <>
-              <div className="artifact-head"><strong>{artifact.title}</strong><span>{ARTIFACT_LABELS[artifact.kind]} · {artifact.format} · {artifact.created_by}</span></div>
-              {artifact.body && <pre>{artifact.body}</pre>}
-              <div className="toolbar">
-                <button type="button" onClick={() => setEditingArtifact(artifact)}><Save size={16} /> Edit</button>
-                {!artifact.run_id && <button type="button" onClick={async () => { await deleteTaskArtifact(artifact.id); await refreshArtifacts(); }}><Trash2 size={16} /> Delete</button>}
-              </div>
-            </>
-          )}
-        </article>
-      ))}
-    </div>
-    <form className="artifact-form" onSubmit={submitArtifact}>
-      <div className="artifact-grid">
-        <select value={artifactForm.kind} onChange={(e) => setArtifactForm({ ...artifactForm, kind: e.target.value as TaskArtifact["kind"] })}>
-          {ARTIFACT_KINDS.map((kind) => <option key={kind} value={kind}>{ARTIFACT_LABELS[kind]}</option>)}
-        </select>
-        <select value={artifactForm.format} onChange={(e) => setArtifactForm({ ...artifactForm, format: e.target.value as TaskArtifact["format"] })}>
-          <option value="markdown">Markdown</option>
-          <option value="text">Text</option>
-          <option value="json">JSON</option>
-        </select>
+    <section className="drawer-summary">
+      <p>{task.description || "No description"}</p>
+      <div className="drawer-meta">
+        <span>{agents.find((agent) => agent.id === task.assignee_agent_id)?.name || "Unassigned"}</span>
+        <span>{STATUS_LABELS[task.status]}</span>
+        <span>{task.lifecycle_id || "default"}</span>
+        <span>retries {task.retry_count}</span>
       </div>
-      <input value={artifactForm.title} onChange={(e) => setArtifactForm({ ...artifactForm, title: e.target.value })} placeholder="Artifact title" required />
-      <textarea value={artifactForm.body} onChange={(e) => setArtifactForm({ ...artifactForm, body: e.target.value })} placeholder="Artifact body" />
-      <button><Plus size={16} /> Add artifact</button>
-    </form>
-    <h3>Comments</h3>
-    <div className="timeline">{comments.map((item) => <p key={item.id}><strong>{item.author}</strong>: {item.body}</p>)}</div>
-    <form className="comment-form" onSubmit={async (e) => { e.preventDefault(); await addComment(task.id, comment); setComment(""); setComments(await listComments(task.id)); }}><input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add comment" /><button><MessageSquare size={16} /> Comment</button></form>
-    <h3>Wakeups</h3>
-    <div className="runs">{wakeups.length === 0 ? <p>No wakeups yet.</p> : wakeups.map((wakeup) => <p key={wakeup.id}>{wakeup.status} · {wakeup.source} · {wakeup.reason} · coalesced {wakeup.coalesced_count}</p>)}</div>
-    <h3>Runs</h3>
-    <div className="runs">{runs.map((run) => <p key={run.id}>{run.status} · {run.cli_kind} · wake {run.wakeup_id ? shortId(run.wakeup_id) : "legacy"} · {run.started_at || "not started"}</p>)}</div>
-    <h3>Latest Log</h3>
-    <pre>{events.map((event) => `[${event.level}] ${event.message}`).join("\n") || "No events yet."}</pre>
+      <div className="tag-row"><span className={`liveness-${liveness?.liveness || "ready"}`}>{liveness?.liveness || "ready"}</span>{task.execution_state && <span>{task.execution_state}</span>}</div>
+      {(task.tags || []).length > 0 && <div className="tag-row">{task.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
+      <div className="toolbar">
+        <button
+          onClick={async () => { await runTask(task.id); await onRefresh(); await refreshControlPlane(); }}
+          disabled={hasOpenInteraction}
+          title={hasOpenInteraction ? "Answer open interaction before running" : "Run task now"}
+        ><Play size={16} /> Run now</button>
+      </div>
+    </section>
+    <div className="drawer-layout">
+      <div className="drawer-main">
+        <section className="drawer-section">
+          <h3>Conversation</h3>
+          <div className="conversation">
+            {conversationItems.length === 0 && <p className="empty-copy">No conversation yet.</p>}
+            {conversationItems.map((item) => {
+              if (item.kind === "comment") {
+                return <article key={item.id} className={`chat-message ${conversationClass(item.author)}`}>
+                  <div className="chat-meta"><strong>{conversationAuthor(item.author)}</strong><span>{compactDate(item.createdAt)}</span></div>
+                  <p>{item.body}</p>
+                </article>;
+              }
+              const interaction = item.interaction;
+              return <article key={item.id} className={`chat-message from-interaction ${interaction.status === "open" ? "open" : ""}`}>
+                <div className="chat-meta"><strong>{interaction.title || interaction.kind}</strong><span>{interaction.kind} · {interaction.status} · {compactDate(interaction.created_at)}</span></div>
+                {interaction.summary && <p>{interaction.summary}</p>}
+                {interactionQuestion(interaction) && <p className="interaction-question">{interactionQuestion(interaction)}</p>}
+                {interaction.status !== "open" && interactionResolutionText(interaction) && <p className="interaction-resolution">{interactionResolutionText(interaction)}</p>}
+                {interaction.status === "open" && interaction.kind === "ask_user_questions" && (
+                  <form className="interaction-form" onSubmit={async (event) => {
+                    event.preventDefault();
+                    const response = (interactionDrafts[interaction.id] || "").trim();
+                    if (!response) return;
+                    await answerInteraction(interaction.id, response);
+                    setInteractionDrafts((current) => ({ ...current, [interaction.id]: "" }));
+                    await refreshControlPlane();
+                  }}>
+                    <textarea
+                      value={interactionDrafts[interaction.id] || ""}
+                      onChange={(event) => setInteractionDrafts((current) => ({ ...current, [interaction.id]: event.target.value }))}
+                      placeholder="Answer required"
+                      required
+                    />
+                    <button type="submit"><MessageSquare size={16} /> Answer</button>
+                  </form>
+                )}
+                {interaction.status === "open" && interaction.kind !== "ask_user_questions" && (
+                  <form className="interaction-form" onSubmit={(event) => event.preventDefault()}>
+                    <textarea
+                      value={interactionDrafts[interaction.id] || ""}
+                      onChange={(event) => setInteractionDrafts((current) => ({ ...current, [interaction.id]: event.target.value }))}
+                      placeholder="Optional note"
+                    />
+                    <div className="toolbar">
+                      <button type="button" onClick={async () => { await acceptInteraction(interaction.id, interactionDrafts[interaction.id] || ""); await refreshControlPlane(); }}><Check size={16} /> Accept</button>
+                      <button type="button" onClick={async () => { await rejectInteraction(interaction.id, interactionDrafts[interaction.id] || ""); await refreshControlPlane(); }}><Trash2 size={16} /> Reject</button>
+                    </div>
+                  </form>
+                )}
+              </article>;
+            })}
+          </div>
+          <form className="comment-form" onSubmit={async (e) => { e.preventDefault(); const body = comment.trim(); if (!body) return; await addComment(task.id, body); setComment(""); setComments(await listComments(task.id)); }}>
+            <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add comment" />
+            <button disabled={!comment.trim()}><MessageSquare size={16} /> Comment</button>
+          </form>
+        </section>
+        <section className="drawer-section">
+          <h3>Artifacts</h3>
+          <div className="artifacts">
+            {artifacts.length === 0 && <p className="empty-copy">No artifacts yet.</p>}
+            {artifacts.map((artifact) => (
+              <article key={artifact.id} className="artifact-item">
+                {editingArtifact?.id === artifact.id ? (
+                  <form className="artifact-form" onSubmit={saveArtifact}>
+                    <div className="artifact-grid">
+                      <select value={editingArtifact.kind} onChange={(e) => setEditingArtifact({ ...editingArtifact, kind: e.target.value as TaskArtifact["kind"] })}>
+                        {ARTIFACT_KINDS.map((kind) => <option key={kind} value={kind}>{ARTIFACT_LABELS[kind]}</option>)}
+                      </select>
+                      <select value={editingArtifact.format} onChange={(e) => setEditingArtifact({ ...editingArtifact, format: e.target.value as TaskArtifact["format"] })}>
+                        <option value="markdown">Markdown</option>
+                        <option value="text">Text</option>
+                        <option value="json">JSON</option>
+                      </select>
+                    </div>
+                    <input value={editingArtifact.title} onChange={(e) => setEditingArtifact({ ...editingArtifact, title: e.target.value })} required />
+                    <textarea value={editingArtifact.body} onChange={(e) => setEditingArtifact({ ...editingArtifact, body: e.target.value })} />
+                    <div className="toolbar"><button><Save size={16} /> Save</button><button type="button" onClick={() => setEditingArtifact(null)}>Cancel</button></div>
+                  </form>
+                ) : (
+                  <>
+                    <div className="artifact-head"><strong>{artifact.title}</strong><span>{ARTIFACT_LABELS[artifact.kind]} · {artifact.format} · {artifact.created_by} · {compactDate(artifact.created_at)}</span></div>
+                    {artifact.body && <pre>{artifact.body}</pre>}
+                    <div className="toolbar">
+                      <button type="button" onClick={() => setEditingArtifact(artifact)}><Save size={16} /> Edit</button>
+                      {!artifact.run_id && <button type="button" onClick={async () => { await deleteTaskArtifact(artifact.id); await refreshArtifacts(); }}><Trash2 size={16} /> Delete</button>}
+                    </div>
+                  </>
+                )}
+              </article>
+            ))}
+          </div>
+          <form className="artifact-form" onSubmit={submitArtifact}>
+            <div className="artifact-grid">
+              <select value={artifactForm.kind} onChange={(e) => setArtifactForm({ ...artifactForm, kind: e.target.value as TaskArtifact["kind"] })}>
+                {ARTIFACT_KINDS.map((kind) => <option key={kind} value={kind}>{ARTIFACT_LABELS[kind]}</option>)}
+              </select>
+              <select value={artifactForm.format} onChange={(e) => setArtifactForm({ ...artifactForm, format: e.target.value as TaskArtifact["format"] })}>
+                <option value="markdown">Markdown</option>
+                <option value="text">Text</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+            <input value={artifactForm.title} onChange={(e) => setArtifactForm({ ...artifactForm, title: e.target.value })} placeholder="Artifact title" required />
+            <textarea value={artifactForm.body} onChange={(e) => setArtifactForm({ ...artifactForm, body: e.target.value })} placeholder="Artifact body" />
+            <button><Plus size={16} /> Add artifact</button>
+          </form>
+        </section>
+      </div>
+      <aside className="drawer-side">
+        <section className="drawer-section">
+          <h3>Wakeups</h3>
+          <div className="runs compact">{wakeups.length === 0 ? <p>No wakeups yet.</p> : wakeups.map((wakeup) => <p key={wakeup.id}>{wakeup.status} · {wakeup.source} · {wakeup.reason} · coalesced {wakeup.coalesced_count}</p>)}</div>
+        </section>
+        <section className="drawer-section">
+          <h3>Runs</h3>
+          <div className="runs compact">{runs.length === 0 ? <p>No runs yet.</p> : runs.map((run) => <p key={run.id}>{run.status} · {run.cli_kind} · wake {run.wakeup_id ? shortId(run.wakeup_id) : "legacy"} · {compactDate(run.started_at) || "not started"}</p>)}</div>
+        </section>
+        <section className="drawer-section">
+          <h3>Latest Log</h3>
+          <pre>{events.map((event) => `[${event.level}] ${event.message}`).join("\n") || "No events yet."}</pre>
+        </section>
+      </aside>
+    </div>
   </div>;
 }
 
@@ -1588,7 +1648,7 @@ type LifecycleEditorStep = Pick<LifecycleStep, "id" | "agent_id" | "cli_kind" | 
 
 const skipTagExamples = ["backend-only", "frontend-only", "skip-qa", "always"];
 const includeTagExamples = ["has-ui", "needs-api", "needs-review"];
-const modelExamples = ["claude-sonnet-4-6", "claude-opus-4-6", "gpt-5.3-codex"];
+const modelExamples = ["gpt-5.3-codex", "gpt-5.5", "claude-sonnet-4-6", "claude-opus-4-7"];
 
 function csvTags(value: string): string[] {
   return value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
@@ -1657,8 +1717,8 @@ function LifecyclesPage({ openLifecycle, openAddLifecycle }: { openLifecycle: (i
     <div className="board-toolbar">
       <div className="default-model-row">
         <label className="field">
-          <span className="field-label">Default model</span>
-          <input value={defaultModel} onChange={(e) => setDefaultModelValue(e.target.value)} placeholder="claude-sonnet-4-6" />
+          <span className="field-label">Default Codex model</span>
+          <input value={defaultModel} onChange={(e) => setDefaultModelValue(e.target.value)} placeholder="gpt-5.3-codex" />
         </label>
         <button type="button" onClick={saveDefaultModel} disabled={busy || !defaultModel.trim()}><Save size={16} /> Save model</button>
       </div>
@@ -1823,7 +1883,7 @@ function LifecycleEditorPage({ mode, lifecycleId, onSaved, onCancel, onOpenLifec
           </div>
           <div>
             <strong>Runner and model</strong>
-            <p>Runner chooses Codex or Claude for that step. Model is optional; empty uses the global default model.</p>
+            <p>Runner chooses Codex or Claude for that step. Model is optional; empty uses the CLI-aware default model.</p>
             <span>Examples: <code>codex</code>, <code>claude</code>, <code>{modelExamples[0]}</code></span>
           </div>
         </div>
@@ -1874,7 +1934,7 @@ function LifecycleEditorPage({ mode, lifecycleId, onSaved, onCancel, onOpenLifec
               </label>
               <label className="field">
                 <span className="field-label">Model</span>
-                <input value={step.model_id} onChange={(e) => updateStep(index, { model_id: e.target.value })} placeholder={`inherit default: ${defaultModel || "claude-sonnet-4-6"}`} />
+                <input value={step.model_id} onChange={(e) => updateStep(index, { model_id: e.target.value })} placeholder={`inherit CLI default: ${defaultModel || "gpt-5.3-codex"}`} />
                 <span className="field-help">Optional model override. Examples: {modelExamples.join(", ")}.</span>
               </label>
               <label className="field" title="Step is skipped if the task has any of these tags.">

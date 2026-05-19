@@ -779,6 +779,57 @@ func TestApplyAgentResponseCreatesHumanInteractionAndWaits(t *testing.T) {
 	}
 }
 
+func TestApplyAgentResponseConvertsHumanReviewToInteraction(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	pmID := "pm"
+	runID := "run-1"
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)")).
+		WithArgs(sqlmock.AnyArg(), "task-1", "agent:pm", "[HUMAN REVIEW REQUESTED] Please approve").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_interactions WHERE task_id=$1 AND idempotency_key=$2")).
+		WithArgs("task-1", "human-review:run-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO task_interactions (id, task_id, kind, status, title, summary, payload, continuation_policy, idempotency_key, source_comment_id, source_run_id, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`)).
+		WithArgs(sqlmock.AnyArg(), "task-1", "approval_request", "open", "Human review requested", "[HUMAN REVIEW REQUESTED] Please approve", []byte(`{"question":"Approve this human review request so the workflow can continue?"}`), "wake_assignee", "human-review:run-1", sqlmock.AnyArg(), &runID, "agent:pm").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_interactions WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(interactionRows(now).AddRow("interaction-1", "task-1", "approval_request", "open", "Human review requested", "[HUMAN REVIEW REQUESTED] Please approve", []byte(`{"question":"Approve this human review request so the workflow can continue?"}`), []byte(`{}`), "wake_assignee", "human-review:run-1", nil, &runID, "agent:pm", nil, nil, now, now))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,'system',$3)")).
+		WithArgs(sqlmock.AnyArg(), "task-1", "Waiting on human interaction: Human review requested").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, tags=$4, lifecycle_id=$5, updated_at=now() WHERE id=$1")).
+		WithArgs("task-1", "waiting", sqlmock.AnyArg(), sqlmock.AnyArg(), "default").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	tx, err := store.DB().BeginTxx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.ApplyAgentResponse(context.Background(), tx, models.Task{ID: "task-1", ProjectID: "project-1", AssigneeAgentID: &pmID, LifecycleID: "default"}, models.Agent{ID: "pm"}, AgentResponse{
+		TaskUpdates: TaskUpdates{Status: "in_progress", Comment: "Please approve", RequestHumanReview: true},
+	}, &runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResolveQuestionInteractionRecordsAnswerAndQueuesWakeup(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {

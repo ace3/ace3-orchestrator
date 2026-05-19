@@ -70,11 +70,35 @@ func TestLifecyclesMigrationAddsControlPlaneTables(t *testing.T) {
 		"include_when TEXT[] NOT NULL DEFAULT '{}'",
 		"model_id     TEXT NOT NULL DEFAULT ''",
 		"CREATE TABLE IF NOT EXISTS app_settings",
-		"('default_model', 'claude-sonnet-4-6')",
+		"('default_model', 'gpt-5.3-codex')",
+		"('default_codex_model', 'gpt-5.3-codex')",
+		"('planning_codex_model', 'gpt-5.5')",
+		"('default_claude_model', 'claude-sonnet-4-6')",
+		"('planning_claude_model', 'claude-opus-4-7')",
 	}
 	for _, item := range required {
 		if !strings.Contains(sql, item) {
 			t.Fatalf("lifecycle migration missing %q", item)
+		}
+	}
+}
+
+func TestCLIModelDefaultsMigrationBackfillsSettings(t *testing.T) {
+	body, err := migrationFiles.ReadFile("migrations/0010_cli_model_defaults.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	required := []string{
+		"('default_codex_model', 'gpt-5.3-codex')",
+		"('planning_codex_model', 'gpt-5.5')",
+		"('default_claude_model', 'claude-sonnet-4-6')",
+		"('planning_claude_model', 'claude-opus-4-7')",
+		"WHERE key = 'default_model' AND value = 'claude-sonnet-4-6'",
+	}
+	for _, item := range required {
+		if !strings.Contains(sql, item) {
+			t.Fatalf("cli model defaults migration missing %q", item)
 		}
 	}
 }

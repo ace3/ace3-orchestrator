@@ -1323,11 +1323,11 @@ tbody tr:hover { background: var(--bg-hover); }
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(560px, 100vw);
+  width: min(920px, 96vw);
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
   box-shadow: var(--shadow-drawer);
-  padding: 20px 22px;
+  padding: 20px 24px;
   overflow: auto;
   z-index: 10;
 }
@@ -1342,17 +1342,130 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 .drawer-header h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
 
-.timeline {
-  border-top: 1px solid var(--border);
+.drawer-summary {
+  padding: 0 0 16px;
+  background: transparent;
   border-bottom: 1px solid var(--border);
-  margin: 12px 0;
-  padding: 10px 0;
+  margin-bottom: 16px;
+}
+.drawer-summary p {
+  margin: 0 0 12px;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.drawer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.drawer-meta span {
+  color: var(--text);
+  background: var(--bg-chip);
+  border-radius: 10px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+.drawer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  gap: 20px;
+  align-items: start;
+}
+.drawer-main,
+.drawer-side {
+  min-width: 0;
+}
+.drawer-main {
+  display: block;
+}
+.drawer-side {
+  position: static;
+  height: auto;
+  overflow: visible;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  display: grid;
+  gap: 16px;
+}
+.drawer-section {
+  padding: 0;
+  background: transparent;
+  min-width: 0;
+}
+.drawer-section + .drawer-section {
+  margin-top: 18px;
+}
+.drawer-section h3 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.empty-copy {
+  margin: 0;
+  color: var(--text-muted);
+}
+.conversation {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .comment-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
 .comment-form textarea { min-height: 64px; }
+
+.chat-message {
+  display: grid;
+  gap: 6px;
+  width: min(82%, 620px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--bg-card);
+}
+.chat-message p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.chat-message.from-human {
+  justify-self: end;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+}
+.chat-message.from-agent,
+.chat-message.from-interaction {
+  justify-self: start;
+}
+.chat-message.from-system {
+  justify-self: center;
+  width: 100%;
+  background: transparent;
+  border-style: dashed;
+}
+.chat-message.open {
+  border-color: var(--status-waiting);
+  background: color-mix(in srgb, var(--status-waiting) 10%, var(--bg-card));
+}
+.chat-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.chat-meta strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+.chat-meta span {
+  color: var(--text-dim);
+  font-size: 11px;
+}
 
 .artifacts {
   display: grid;
@@ -1365,18 +1478,13 @@ tbody tr:hover { background: var(--bg-hover); }
   padding: 10px;
   background: var(--bg-card);
 }
-.interaction-item.open {
-  border-color: var(--status-waiting);
-  background: color-mix(in srgb, var(--status-waiting) 10%, var(--bg-card));
-}
 .interaction-question,
 .interaction-resolution {
-  margin: 8px 0 0;
-  color: var(--text-muted);
+  color: var(--text);
   font-size: 12.5px;
 }
 .interaction-resolution {
-  color: var(--text);
+  color: var(--success-text);
 }
 .interaction-form {
   display: grid;
@@ -1423,6 +1531,15 @@ tbody tr:hover { background: var(--bg-hover); }
   margin: 0 0 8px;
   color: var(--text-muted);
   font-size: 12.5px;
+}
+.runs.compact p {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.drawer-side pre {
+  max-height: 260px;
+  min-height: 120px;
 }
 
 .danger-zone {
@@ -2186,6 +2303,20 @@ pre {
   .board-filters { display: grid; }
   .board-filters label { min-width: 0; }
   .kanban { grid-auto-columns: 260px; }
+  .drawer {
+    width: 100vw;
+    padding: 16px;
+  }
+  .drawer-layout {
+    grid-template-columns: 1fr;
+  }
+  .chat-message {
+    width: 100%;
+  }
+  .comment-form,
+  .artifact-grid {
+    grid-template-columns: 1fr;
+  }
   aside { position: static; height: auto; }
   .skills-search { width: 100%; min-width: 0; }
   .skills-toolbar { align-items: stretch; }

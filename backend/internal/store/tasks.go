@@ -525,7 +525,11 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		status = "in_review"
 		update.Comment = "[HUMAN REVIEW REQUESTED] " + update.Comment
 	}
-	humanInteractions, err := normalizeHumanInteractions(response.HumanInteractions, agent.ID, runID)
+	rawHumanInteractions := response.HumanInteractions
+	if update.RequestHumanReview && len(rawHumanInteractions) == 0 {
+		rawHumanInteractions = []HumanInteraction{humanReviewInteraction(update.Comment, runID)}
+	}
+	humanInteractions, err := normalizeHumanInteractions(rawHumanInteractions, agent.ID, runID)
 	if err != nil {
 		return err
 	}
@@ -627,6 +631,24 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		}
 	}
 	return nil
+}
+
+func humanReviewInteraction(comment string, runID *string) HumanInteraction {
+	payload, _ := json.Marshal(map[string]string{
+		"question": "Approve this human review request so the workflow can continue?",
+	})
+	interaction := HumanInteraction{
+		Kind:               "approval_request",
+		Title:              "Human review requested",
+		Summary:            strings.TrimSpace(comment),
+		Payload:            payload,
+		ContinuationPolicy: "wake_assignee",
+	}
+	if runID != nil && strings.TrimSpace(*runID) != "" {
+		key := "human-review:" + strings.TrimSpace(*runID)
+		interaction.IdempotencyKey = &key
+	}
+	return interaction
 }
 
 func normalizeHumanInteractions(items []HumanInteraction, agentID string, runID *string) ([]InteractionInput, error) {

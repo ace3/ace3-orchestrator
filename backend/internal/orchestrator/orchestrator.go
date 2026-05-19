@@ -213,10 +213,6 @@ func (o *Orchestrator) lifecyclePromptContext(ctx context.Context, task models.T
 	if lifecycleID == "" {
 		lifecycleID = repoconfig.DefaultLifecycleID
 	}
-	currentModel, err := o.lifecycles.ModelForStep(ctx, lifecycleID, agentID)
-	if err != nil {
-		return LifecyclePromptContext{}, err
-	}
 	currentCLIKind, err := o.lifecycles.CLIKindForStep(ctx, lifecycleID, agentID)
 	if err != nil {
 		return LifecyclePromptContext{}, err
@@ -224,22 +220,29 @@ func (o *Orchestrator) lifecyclePromptContext(ctx context.Context, task models.T
 	if currentCLIKind == "" {
 		currentCLIKind = fallbackCLIKind
 	}
+	currentModel, err := o.lifecycles.ModelForStep(ctx, lifecycleID, agentID, currentCLIKind)
+	if err != nil {
+		return LifecyclePromptContext{}, err
+	}
 	remaining, err := o.lifecycles.RemainingSteps(ctx, lifecycleID, agentID, []string(task.Tags))
 	if err != nil {
 		return LifecyclePromptContext{}, err
 	}
 	steps := make([]LifecyclePromptStep, 0, len(remaining))
 	for _, step := range remaining {
-		modelID := strings.TrimSpace(step.ModelID)
-		if modelID == "" {
-			modelID, err = o.lifecycles.ModelForStep(ctx, lifecycleID, step.AgentID)
+		cliKind := strings.TrimSpace(step.CLIKind)
+		if cliKind == "" {
+			cliKind, err = o.lifecycles.CLIKindForStep(ctx, lifecycleID, step.AgentID)
 			if err != nil {
 				return LifecyclePromptContext{}, err
 			}
 		}
-		cliKind := strings.TrimSpace(step.CLIKind)
 		if cliKind == "" {
-			cliKind, err = o.lifecycles.CLIKindForStep(ctx, lifecycleID, step.AgentID)
+			cliKind = fallbackCLIKind
+		}
+		modelID := strings.TrimSpace(step.ModelID)
+		if modelID == "" {
+			modelID, err = o.lifecycles.ModelForStep(ctx, lifecycleID, step.AgentID, cliKind)
 			if err != nil {
 				return LifecyclePromptContext{}, err
 			}
