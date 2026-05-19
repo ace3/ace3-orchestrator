@@ -12,7 +12,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"mini-paperclip/backend/internal/models"
-	"mini-paperclip/backend/internal/repoconfig"
 )
 
 const maxSkillPreviewBytes = 512 * 1024
@@ -197,29 +196,20 @@ type orchestratorMapResponse struct {
 
 type orchestratorMapSkill struct {
 	models.Skill
-	SourceName        string   `json:"source_name"`
-	RecommendedAgents []string `json:"recommended_agents"`
-	TriggerKeywords   []string `json:"trigger_keywords"`
-	TriggerTags       []string `json:"trigger_tags"`
-	Notes             string   `json:"notes"`
+	SourceName     string   `json:"source_name"`
+	AssignedAgents []string `json:"assigned_agents"`
 }
 
 type orchestratorMapAgent struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	Role              string   `json:"role"`
-	CLIKind           string   `json:"cli_kind"`
-	BasePrompt        string   `json:"base_prompt"`
-	AssignedSkills    []string `json:"assigned_skills"`
-	RecommendedSkills []string `json:"recommended_skills"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Role           string   `json:"role"`
+	CLIKind        string   `json:"cli_kind"`
+	BasePrompt     string   `json:"base_prompt"`
+	AssignedSkills []string `json:"assigned_skills"`
 }
 
 func (a *API) orchestratorMap(w http.ResponseWriter, r *http.Request) {
-	cfg, err := repoconfig.Load()
-	if err != nil {
-		respond(w, nil, err)
-		return
-	}
 	sources, err := a.store.ListSkillSources(r.Context())
 	if err != nil {
 		respond(w, nil, err)
@@ -234,48 +224,34 @@ func (a *API) orchestratorMap(w http.ResponseWriter, r *http.Request) {
 	for _, source := range sources {
 		sourceNames[source.ID] = source.Name
 	}
-	meta := make(map[string]repoconfig.Skill, len(cfg.Skills))
-	for _, skill := range cfg.Skills {
-		meta[skill.Name] = skill
-	}
-	mapSkills := make([]orchestratorMapSkill, 0, len(skills))
-	recommendedByAgent := map[string][]string{}
-	for _, skill := range skills {
-		item := orchestratorMapSkill{Skill: skill, SourceName: sourceNames[skill.SourceID]}
-		if m, ok := meta[skill.Name]; ok {
-			item.RecommendedAgents = nonNilStrings(m.RecommendedAgents)
-			item.TriggerKeywords = nonNilStrings(m.TriggerKeywords)
-			item.TriggerTags = nonNilStrings(m.TriggerTags)
-			item.Notes = m.Notes
-			for _, agentID := range m.RecommendedAgents {
-				recommendedByAgent[agentID] = append(recommendedByAgent[agentID], skill.Name)
-			}
-		} else {
-			item.RecommendedAgents = []string{}
-			item.TriggerKeywords = []string{}
-			item.TriggerTags = []string{}
-		}
-		mapSkills = append(mapSkills, item)
-	}
 	dbAgents, err := a.store.ListAgents(r.Context())
 	if err != nil {
 		respond(w, nil, err)
 		return
 	}
+	assignedBySkill := map[string][]string{}
 	agents := make([]orchestratorMapAgent, 0, len(dbAgents))
 	for _, agent := range dbAgents {
 		assignedSkills := make([]string, 0, len(agent.Skills))
 		for _, skill := range agent.Skills {
 			assignedSkills = append(assignedSkills, skill.Name)
+			assignedBySkill[skill.ID] = append(assignedBySkill[skill.ID], agent.ID)
 		}
 		agents = append(agents, orchestratorMapAgent{
-			ID:                agent.ID,
-			Name:              agent.Name,
-			Role:              agent.Role,
-			CLIKind:           agent.CLIKind,
-			BasePrompt:        agent.RolePrompt,
-			AssignedSkills:    assignedSkills,
-			RecommendedSkills: uniqueStrings(recommendedByAgent[agent.ID]),
+			ID:             agent.ID,
+			Name:           agent.Name,
+			Role:           agent.Role,
+			CLIKind:        agent.CLIKind,
+			BasePrompt:     agent.RolePrompt,
+			AssignedSkills: assignedSkills,
+		})
+	}
+	mapSkills := make([]orchestratorMapSkill, 0, len(skills))
+	for _, skill := range skills {
+		mapSkills = append(mapSkills, orchestratorMapSkill{
+			Skill:          skill,
+			SourceName:     sourceNames[skill.SourceID],
+			AssignedAgents: uniqueStrings(assignedBySkill[skill.ID]),
 		})
 	}
 	lifecycles, err := a.store.ListLifecycles(r.Context())
@@ -298,11 +274,4 @@ func uniqueStrings(values []string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func nonNilStrings(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	return values
 }

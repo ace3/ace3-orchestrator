@@ -234,10 +234,7 @@ export type BootstrapStatus = {
 
 export type OrchestratorMapSkill = Skill & {
   source_name: string;
-  recommended_agents: string[];
-  trigger_keywords: string[];
-  trigger_tags: string[];
-  notes: string;
+  assigned_agents: string[];
 };
 
 export type OrchestratorMapAgent = {
@@ -247,7 +244,6 @@ export type OrchestratorMapAgent = {
   cli_kind: "claude" | "codex";
   base_prompt: string;
   assigned_skills: string[];
-  recommended_skills: string[];
 };
 
 export type OrchestratorMapLifecycle = {

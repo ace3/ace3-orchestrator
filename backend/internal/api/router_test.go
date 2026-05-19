@@ -285,7 +285,7 @@ func TestOrchestratorMapRoute(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"recommended_agents":["backend","em"]`) ||
+	if !strings.Contains(rec.Body.String(), `"assigned_agents":["custom-backend"]`) ||
 		!strings.Contains(rec.Body.String(), `"id":"custom-backend"`) ||
 		!strings.Contains(rec.Body.String(), `"base_prompt":"DB prompt"`) {
 		t.Fatalf("unexpected response: %s", rec.Body.String())

@@ -245,7 +245,6 @@ function App() {
         <button className={route === "agents" || route === "agent-new" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
         <button className={route === "lifecycles" || route === "lifecycle-new" || route === "lifecycle" ? "active" : ""} onClick={() => navigate("lifecycles")}><GitBranch size={16} /> Lifecycles</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
-        <button className={route === "map" ? "active" : ""} onClick={() => navigate("map")}><GitBranch size={16} /> Map</button>
         <div className="sidebar-footer">
           <ThemeSwitcher />
           <label className="token">API token<input value={token} onChange={(event) => { updateToken(event.target.value); setToken(event.target.value); }} /></label>
@@ -1323,40 +1322,30 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   </div>;
 }
 
-function recommendationNamesForAgent(map: OrchestratorMap | null, agentId: string) {
-  return new Set(map?.agents.find((item) => item.id === agentId)?.recommended_skills || []);
-}
-
 function SkillCheckboxes({
   skills,
   selectedSkillIds,
-  recommendedSkillNames,
   onToggle,
 }: {
   skills: Skill[];
   selectedSkillIds: string[];
-  recommendedSkillNames: Set<string>;
   onToggle: (skill: Skill, checked: boolean) => void;
 }) {
   const selected = new Set(selectedSkillIds);
   return <div className="skill-picker">{skills.map((skill) => {
-    const recommended = recommendedSkillNames.has(skill.name);
-    return <label key={skill.id} className={recommended ? "recommended-skill" : undefined}>
+    return <label key={skill.id}>
       <input type="checkbox" checked={selected.has(skill.id)} onChange={(e) => onToggle(skill, e.target.checked)} />
       <span>{skill.name}</span>
-      {recommended && <em>Recommended</em>}
     </label>;
   })}</div>;
 }
 
 function AgentsPage({ openAgent, openAddAgent }: { openAgent: (id: string) => void; openAddAgent: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [error, setError] = useState("");
   async function refresh() {
-    const [nextAgents, nextMap] = await Promise.all([listAgents(), getOrchestratorMap()]);
+    const nextAgents = await listAgents();
     setAgents(nextAgents);
-    setMap(nextMap);
   }
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
@@ -1368,11 +1357,9 @@ function AgentsPage({ openAgent, openAddAgent }: { openAgent: (id: string) => vo
     </div>
     <div className="list">
       {agents.map((agent) => {
-        const mapAgent = map?.agents.find((item) => item.id === agent.id);
         return <article className="clickable" key={agent.id} onClick={() => openAgent(agent.id)}>
         <h3>{agent.name}</h3>
         <span>{agent.role} · {agent.cli_kind} · {agent.enabled ? "enabled" : "disabled"} · {agent.skills?.length || 0} skills</span>
-        {mapAgent && <p className="empty-state">Recommended: {mapAgent.recommended_skills.length ? mapAgent.recommended_skills.join(", ") : "none"}</p>}
         <div className="toolbar">
           <button type="button" onClick={async (e) => { e.stopPropagation(); const copy = await duplicateAgent(agent.id); await refresh(); openAgent(copy.id); }}><Plus size={16} /> Duplicate</button>
           <button type="button" onClick={async (e) => { e.stopPropagation(); await deleteAgent(agent.id); await refresh(); }}><Trash2 size={16} /> Delete</button>
@@ -1386,9 +1373,7 @@ function AgentsPage({ openAgent, openAddAgent }: { openAgent: (id: string) => vo
 
 function AgentCreatePage({ onCreated, onCancel, onOpenAgents }: { onCreated: (id: string) => void; onCancel: () => void; onOpenAgents: () => void }) {
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
-  const [skillsTouched, setSkillsTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [form, setForm] = useState({
@@ -1400,23 +1385,12 @@ function AgentCreatePage({ onCreated, onCancel, onOpenAgents }: { onCreated: (id
   });
 
   useEffect(() => {
-    Promise.all([listInstalledSkills(), getOrchestratorMap()])
-      .then(([nextSkills, nextMap]) => {
-        setSkills(nextSkills);
-        setMap(nextMap);
-      })
+    listInstalledSkills()
+      .then(setSkills)
       .catch((e) => setError(e.message));
   }, []);
 
-  const recommendedSkillNames = useMemo(() => recommendationNamesForAgent(map, form.id), [map, form.id]);
-
-  useEffect(() => {
-    if (skillsTouched) return;
-    setSelectedSkillIds(skills.filter((skill) => recommendedSkillNames.has(skill.name)).map((skill) => skill.id));
-  }, [recommendedSkillNames, skills, skillsTouched]);
-
   function toggleSkill(skill: Skill, checked: boolean) {
-    setSkillsTouched(true);
     setSelectedSkillIds((current) => checked
       ? [...current.filter((id) => id !== skill.id), skill.id]
       : current.filter((id) => id !== skill.id));
@@ -1450,7 +1424,7 @@ function AgentCreatePage({ onCreated, onCancel, onOpenAgents }: { onCreated: (id
       </div>
       <textarea value={form.role_prompt} onChange={(e) => setForm({ ...form, role_prompt: e.target.value })} placeholder="System prompt" required />
       <h2 className="section-title">Skills</h2>
-      <SkillCheckboxes skills={skills} selectedSkillIds={selectedSkillIds} recommendedSkillNames={recommendedSkillNames} onToggle={toggleSkill} />
+      <SkillCheckboxes skills={skills} selectedSkillIds={selectedSkillIds} onToggle={toggleSkill} />
       <div className="toolbar">
         <button disabled={busy}><Plus size={16} /> Create agent</button>
         <button type="button" onClick={onCancel}>Cancel</button>
@@ -1463,22 +1437,19 @@ function AgentCreatePage({ onCreated, onCancel, onOpenAgents }: { onCreated: (id
 function AgentDetailPage({ id, onSaved, onOpenAgents }: { id: string; onSaved: (id: string) => void; onOpenAgents: () => void }) {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([getAgent(id), listInstalledSkills(), getOrchestratorMap()])
-      .then(([nextAgent, nextSkills, nextMap]) => {
+    Promise.all([getAgent(id), listInstalledSkills()])
+      .then(([nextAgent, nextSkills]) => {
         setAgent(nextAgent);
         setSkills(nextSkills);
-        setMap(nextMap);
       })
       .catch((e) => setError(e.message));
   }, [id]);
 
   if (!agent) return <Panel title="Agent" breadcrumb={[{ label: "Agents", onClick: onOpenAgents }]}><Error text={error || "Loading..."} /></Panel>;
-  const recommendedSkillNames = recommendationNamesForAgent(map, agent.id);
 
   async function save() {
     const current = agent;
@@ -1523,7 +1494,6 @@ function AgentDetailPage({ id, onSaved, onOpenAgents }: { id: string; onSaved: (
       <SkillCheckboxes
         skills={skills}
         selectedSkillIds={(agent.skills || []).map((skill) => skill.id)}
-        recommendedSkillNames={recommendedSkillNames}
         onToggle={toggleSkill}
       />
       {agent.definition_hash && <p className="empty-state">Definition hash: {agent.definition_hash}</p>}
@@ -2080,7 +2050,6 @@ function SkillSourcesPage() {
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [agentList, setAgentList] = useState<Agent[]>([]);
-  const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [tree, setTree] = useState<SkillTreeEntry | null>(null);
   const [content, setContent] = useState<{ path: string; content: string } | null>(null);
@@ -2095,16 +2064,14 @@ function SkillSourcesPage() {
   const [driftReport, setDriftReport] = useState<SkillDriftReport | null>(null);
 
   async function refresh() {
-    const [nextSources, nextSkills, nextAgents, nextMap] = await Promise.all([
+    const [nextSources, nextSkills, nextAgents] = await Promise.all([
       listSkillSources(),
       listInstalledSkills(true),
       listAgents().catch(() => [] as Agent[]),
-      getOrchestratorMap().catch(() => null as OrchestratorMap | null),
     ]);
     setSources(nextSources);
     setSkills(nextSkills);
     setAgentList(nextAgents);
-    setMap(nextMap);
   }
   useEffect(() => { refresh().catch((e) => setError(e.message)); }, []);
 
@@ -2121,17 +2088,6 @@ function SkillSourcesPage() {
     }
     return m;
   }, [agentList]);
-
-  const recommendedByMap = useMemo(() => {
-    const m = new Map<string, string[]>();
-    if (!map) return m;
-    for (const skill of map.skills) {
-      if (skill.recommended_agents && skill.recommended_agents.length > 0) {
-        m.set(skill.id, skill.recommended_agents);
-      }
-    }
-    return m;
-  }, [map]);
 
   const filteredSkills = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -2253,7 +2209,7 @@ function SkillSourcesPage() {
   const totalSkills = skills.length;
   const ignoredSkills = skills.filter((skill) => skill.ignored).length;
   const totalAgents = agentList.length;
-  const recommendedCount = recommendedByMap.size;
+  const assignedSkillCount = Array.from(usedByMap.values()).filter((users) => users.length > 0).length;
 
   return <Panel title="Skill Sources">
     <Error text={error} />
@@ -2264,7 +2220,7 @@ function SkillSourcesPage() {
         <span><strong>{totalSkills}</strong> skill{totalSkills === 1 ? "" : "s"}</span>
         {ignoredSkills > 0 && <span><strong>{ignoredSkills}</strong> ignored</span>}
         <span><strong>{totalAgents}</strong> agent{totalAgents === 1 ? "" : "s"}</span>
-        {recommendedCount > 0 && <span><strong>{recommendedCount}</strong> recommended</span>}
+        {assignedSkillCount > 0 && <span><strong>{assignedSkillCount}</strong> assigned</span>}
       </div>
       <div className="board-toolbar-actions">
         <button type="button" onClick={handleDriftCheck} disabled={!!busy.__drift__}>
@@ -2397,7 +2353,6 @@ function SkillSourcesPage() {
                     <p className="empty-state">No skills in this source.</p>
                   ) : items.map((skill) => {
                     const users = usedByMap.get(skill.id) || [];
-                    const recommended = recommendedByMap.get(skill.id) || [];
                     return (
 	                      <div
 	                        role="button"
@@ -2422,11 +2377,6 @@ function SkillSourcesPage() {
                           {users.length > 0 && (
                             <span className="badge badge-agents" title={users.map((a) => a.name).join(", ")}>
                               {users.length} agent{users.length === 1 ? "" : "s"}
-                            </span>
-                          )}
-                          {recommended.length > 0 && (
-                            <span className="badge badge-recommended" title={`Recommended for: ${recommended.join(", ")}`}>
-                              recommended × {recommended.length}
                             </span>
                           )}
                           <span
@@ -2458,7 +2408,6 @@ function SkillSourcesPage() {
       <div className="skill-rows skill-rows-flat">
         {filteredSkills.map((skill) => {
           const users = usedByMap.get(skill.id) || [];
-          const recommended = recommendedByMap.get(skill.id) || [];
           return (
 	            <div
 	              role="button"
@@ -2481,7 +2430,6 @@ function SkillSourcesPage() {
                 {skill.version && <span className="badge badge-version">{skill.version}</span>}
                 {skill.ignored && <span className="badge badge-ignored">ignored</span>}
                 {users.length > 0 && <span className="badge badge-agents">{users.length} agent{users.length === 1 ? "" : "s"}</span>}
-                {recommended.length > 0 && <span className="badge badge-recommended">rec × {recommended.length}</span>}
                 <span
                   className="skill-inline-action"
                   role="button"
@@ -2560,18 +2508,19 @@ function MapPage() {
   const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [error, setError] = useState("");
   useEffect(() => { getOrchestratorMap().then(setMap).catch((e) => setError(e.message)); }, []);
-  if (!map) return <Panel title="Orchestrator Map"><Error text={error || "Loading..."} /></Panel>;
+  if (!map) return <Panel title="Orchestration Diagnostics"><Error text={error || "Loading..."} /></Panel>;
 
   const skillsBySource = map.sources.map((source) => ({
     source,
     skills: map.skills.filter((skill) => skill.source_id === source.id),
   }));
 
-  return <Panel title="Orchestrator Map">
+  return <Panel title="Orchestration Diagnostics">
     <Error text={error} />
+    <p className="empty-state">Current DB state only. Refresh this page after changing agents, skills, sources, or lifecycles.</p>
     <div className="map-grid">
       <article>
-        <h2 className="section-title">Sources - Skills - Recommendations</h2>
+        <h2 className="section-title">Sources - Skills - Assignments</h2>
         <div className="map-tree">
           {skillsBySource.map(({ source, skills }) => <div className="map-node" key={source.id}>
             <strong>{source.name}</strong>
@@ -2580,8 +2529,9 @@ function MapPage() {
               {skills.map((skill) => <div className="map-node skill" key={skill.id}>
                 <strong>{skill.name}</strong>
                 <span>{skill.path_in_source}</span>
-                {(skill.recommended_agents || []).length > 0 && <div className="tag-row">{skill.recommended_agents.map((agent) => <span key={agent}>{agent}</span>)}</div>}
-                {(skill.trigger_tags || []).length > 0 && <p className="empty-state">Tags: {skill.trigger_tags.join(", ")}</p>}
+                {(skill.assigned_agents || []).length > 0
+                  ? <div className="tag-row">{skill.assigned_agents.map((agent) => <span key={agent}>{agent}</span>)}</div>
+                  : <p className="empty-state">Not assigned to any agent.</p>}
               </div>)}
             </div>
           </div>)}
@@ -2594,8 +2544,9 @@ function MapPage() {
             <strong>{agent.name}</strong>
             <span>{agent.role} · {agent.cli_kind}</span>
             <p>{agent.base_prompt}</p>
-            <div className="tag-row">{agent.assigned_skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
-            {agent.recommended_skills.length > 0 && <p className="empty-state">Dynamic: {agent.recommended_skills.join(", ")}</p>}
+            {agent.assigned_skills.length > 0
+              ? <div className="tag-row">{agent.assigned_skills.map((skill) => <span key={skill}>{skill}</span>)}</div>
+              : <p className="empty-state">No assigned skills.</p>}
           </div>)}
         </div>
       </article>
@@ -2607,7 +2558,7 @@ function MapPage() {
         <p>{lifecycle.description}</p>
         <div className="map-flow">
           {lifecycle.steps.map((step, index) => <React.Fragment key={`${lifecycle.id}:${step.agent_id}:${index}`}>
-            <span>{step.agent_id}{step.skip_when.length ? ` · skip: ${step.skip_when.join(", ")}` : ""}{step.include_when.length ? ` · include: ${step.include_when.join(", ")}` : ""}</span>
+            <span>{step.agent_id}{step.cli_kind ? ` · ${step.cli_kind}` : ""}{step.model_id ? ` · ${step.model_id}` : ""}{step.skip_when.length ? ` · skip: ${step.skip_when.join(", ")}` : ""}{step.include_when.length ? ` · include: ${step.include_when.join(", ")}` : ""}</span>
             {index < lifecycle.steps.length - 1 && <em>-&gt;</em>}
           </React.Fragment>)}
         </div>
