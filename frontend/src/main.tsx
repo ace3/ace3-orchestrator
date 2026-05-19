@@ -1,10 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, Github, GripVertical, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
+import { AlertTriangle, Bot, Boxes, Check, Database, Download, FileText, FolderGit2, GitBranch, Github, GripVertical, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2, Upload } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
   AgentWakeup,
+  AppBackupDryRun,
+  AppBackupImportResult,
+  AppBackupValidation,
+  BackupArtifact,
   BootstrapStatus,
   Comment,
   OrchestratorMap,
@@ -27,6 +31,7 @@ import {
   checkSkillDrift,
   checkSkillSourceUpdates,
   createAgent,
+  createFullBackup,
   createLifecycle,
   createSkillSource,
   createTaskArtifact,
@@ -39,7 +44,11 @@ import {
   deleteProject,
   deleteRepo,
   duplicateAgent,
+  downloadBackupArtifact,
+  dryRunAppBackup,
   eventsURL,
+  exportAppBackup,
+  fullRestorePlan,
   getAgent,
   getDefaultModel,
   getLifecycle,
@@ -52,8 +61,10 @@ import {
   getProject,
   getToken,
   heartbeat,
+  importAppBackup,
   importGitHubSkill,
   listAgents,
+  listBackups,
   listLifecycles,
   listComments,
   listInteractions,
@@ -78,10 +89,14 @@ import {
   updateSkill,
   updateTaskArtifact,
   updateTask,
-  updateProject
+  updateProject,
+  uploadAppBackup,
+  uploadFullBackup,
+  validateAppBackup,
+  validateFullBackup
 } from "./lib/api";
 
-type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent-new" | "agent" | "lifecycles" | "lifecycle-new" | "lifecycle" | "skills" | "map";
+type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent-new" | "agent" | "lifecycles" | "lifecycle-new" | "lifecycle" | "skills" | "backups" | "map";
 
 type RouteState = {
   route: Route;
@@ -107,6 +122,7 @@ function routeFromPath(pathname = window.location.pathname): RouteState {
   if (parts[0] === "lifecycles" && parts[1]) return { route: "lifecycle", projectId: null, agentId: null, lifecycleId: parts[1] };
   if (parts[0] === "lifecycles") return { route: "lifecycles", projectId: null, agentId: null, lifecycleId: null };
   if (parts[0] === "skills") return { route: "skills", projectId: null, agentId: null, lifecycleId: null };
+  if (parts[0] === "backups") return { route: "backups", projectId: null, agentId: null, lifecycleId: null };
   if (parts[0] === "map") return { route: "map", projectId: null, agentId: null, lifecycleId: null };
   return { route: "projects", projectId: null, agentId: null, lifecycleId: null };
 }
@@ -123,6 +139,7 @@ function pathForRoute(next: Route, id?: string) {
     case "lifecycle-new": return "/lifecycles/new";
     case "lifecycle": return id ? `/lifecycles/${encodeURIComponent(id)}` : "/lifecycles";
     case "skills": return "/skills";
+    case "backups": return "/backups";
     case "map": return "/map";
     case "projects":
     default: return "/projects";
@@ -245,6 +262,7 @@ function App() {
         <button className={route === "agents" || route === "agent-new" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
         <button className={route === "lifecycles" || route === "lifecycle-new" || route === "lifecycle" ? "active" : ""} onClick={() => navigate("lifecycles")}><GitBranch size={16} /> Lifecycles</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
+        <button className={route === "backups" ? "active" : ""} onClick={() => navigate("backups")}><Database size={16} /> Backup & Restore</button>
         <div className="sidebar-footer">
           <ThemeSwitcher />
           <label className="token">API token<input value={token} onChange={(event) => { updateToken(event.target.value); setToken(event.target.value); }} /></label>
@@ -262,6 +280,7 @@ function App() {
         {route === "lifecycle-new" && <LifecycleCreatePage onCreated={(id) => navigate("lifecycle", id)} onCancel={() => navigate("lifecycles")} onOpenLifecycles={() => navigate("lifecycles")} />}
         {route === "lifecycle" && lifecycleId && <LifecycleDetailPage id={lifecycleId} onSaved={(id) => navigate("lifecycle", id)} onOpenLifecycles={() => navigate("lifecycles")} />}
         {route === "skills" && <SkillSourcesPage />}
+        {route === "backups" && <BackupRestorePage />}
         {route === "map" && <MapPage />}
       </section>
     </main>
@@ -2490,6 +2509,195 @@ function SkillSourcesPage() {
       onSubmit={async (sha) => { if (pinTarget) await handlePin(pinTarget, sha); }}
     />
   </Panel>;
+}
+
+const backupBundles = [
+  { id: "configuration", label: "Configuration" },
+  { id: "projects", label: "Projects" },
+  { id: "tasks", label: "Tasks" },
+  { id: "execution_history", label: "Execution history" },
+];
+
+function BackupRestorePage() {
+  const [activeTab, setActiveTab] = useState<"full" | "app">("full");
+  const [backups, setBackups] = useState<BackupArtifact[]>([]);
+  const [selectedFull, setSelectedFull] = useState("");
+  const [selectedApp, setSelectedApp] = useState("");
+  const [bundles, setBundles] = useState<string[]>(backupBundles.map((bundle) => bundle.id));
+  const [fullValidation, setFullValidation] = useState("");
+  const [restorePlan, setRestorePlan] = useState("");
+  const [appValidation, setAppValidation] = useState<AppBackupValidation | null>(null);
+  const [dryRun, setDryRun] = useState<AppBackupDryRun | null>(null);
+  const [importResult, setImportResult] = useState<AppBackupImportResult | null>(null);
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+
+  const fullBackups = backups.filter((backup) => backup.kind === "full_db");
+  const appBackups = backups.filter((backup) => backup.kind === "ace3_app");
+
+  async function refresh() {
+    setBackups(await listBackups());
+  }
+
+  useEffect(() => {
+    refresh().catch((err) => setError((err as Error).message));
+  }, []);
+
+  async function run(label: string, action: () => Promise<void>) {
+    setBusy(label);
+    setError("");
+    try {
+      await action();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function download(artifact: BackupArtifact) {
+    await run("download", () => downloadBackupArtifact(artifact));
+  }
+
+  function toggleBundle(id: string) {
+    setBundles((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    setDryRun(null);
+    setImportResult(null);
+  }
+
+  return <Panel title="Backup & Restore">
+    <Error text={error} />
+    <div className="backup-tabs" role="tablist" aria-label="Backup mode">
+      <button type="button" className={activeTab === "full" ? "active" : ""} onClick={() => setActiveTab("full")}><Database size={15} /> Full Database</button>
+      <button type="button" className={activeTab === "app" ? "active" : ""} onClick={() => setActiveTab("app")}><FileText size={15} /> ACE3 Data</button>
+    </div>
+    {activeTab === "full" ? (
+      <div className="backup-grid">
+        <section className="detail-card">
+          <header className="detail-card-header">
+            <div>
+              <h2 className="detail-card-title">Full PostgreSQL Backup</h2>
+              <p className="detail-card-sub">Create and download server-side dumps. Restore stays operator-run.</p>
+            </div>
+            <button type="button" onClick={() => run("create-full", async () => { const backup = await createFullBackup(); setSelectedFull(backup.id); await refresh(); })} disabled={!!busy}><Database size={14} /> Create backup</button>
+          </header>
+          <div className="detail-card-body">
+            <label className="upload-button"><Upload size={14} /> Upload dump<input type="file" accept=".dump,.backup,.sql" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) run("upload-full", async () => { const result = await uploadFullBackup(file); setSelectedFull(result.artifact.id); setFullValidation(summaryFullValidation(result.validation)); await refresh(); });
+              event.currentTarget.value = "";
+            }} /></label>
+            <BackupList artifacts={fullBackups} selected={selectedFull} onSelect={(id) => { setSelectedFull(id); setFullValidation(""); setRestorePlan(""); }} onDownload={download} />
+            <div className="backup-actions">
+              <button type="button" disabled={!selectedFull || !!busy} onClick={() => run("validate-full", async () => setFullValidation(summaryFullValidation(await validateFullBackup(selectedFull))))}><Check size={14} /> Validate</button>
+              <button type="button" disabled={!selectedFull || !!busy} onClick={() => run("restore-plan", async () => {
+                const plan = await fullRestorePlan(selectedFull);
+                setRestorePlan(`${plan.runbook}\n\n${plan.command}`);
+              })}><AlertTriangle size={14} /> Restore instructions</button>
+            </div>
+            {fullValidation && <pre className="backup-output">{fullValidation}</pre>}
+            {restorePlan && <pre className="backup-output">{restorePlan}</pre>}
+          </div>
+        </section>
+        <section className="detail-card danger-card">
+          <header className="detail-card-header">
+            <div>
+              <h2 className="detail-card-title">Restore Boundary</h2>
+              <p className="detail-card-sub">The browser never executes full database restore.</p>
+            </div>
+          </header>
+          <div className="detail-card-body">
+            <p className="backup-note">Use generated instructions on the server after stopping writers and taking an out-of-band database or volume backup. Skill file cache data is outside PostgreSQL and must be protected separately.</p>
+          </div>
+        </section>
+      </div>
+    ) : (
+      <div className="backup-grid">
+        <section className="detail-card">
+          <header className="detail-card-header">
+            <div>
+              <h2 className="detail-card-title">ACE3 Export</h2>
+              <p className="detail-card-sub">Export selected application bundles as versioned JSON.</p>
+            </div>
+            <button type="button" onClick={() => run("export-app", async () => { const backup = await exportAppBackup(bundles); setSelectedApp(backup.id); await refresh(); })} disabled={!!busy || bundles.length === 0}><Download size={14} /> Export</button>
+          </header>
+          <div className="detail-card-body">
+            <div className="bundle-picker">
+              {backupBundles.map((bundle) => <label key={bundle.id}><input type="checkbox" checked={bundles.includes(bundle.id)} onChange={() => toggleBundle(bundle.id)} /> {bundle.label}</label>)}
+            </div>
+            <label className="upload-button"><Upload size={14} /> Upload ACE3 JSON<input type="file" accept=".json,application/json" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) run("upload-app", async () => { const result = await uploadAppBackup(file); setSelectedApp(result.artifact.id); setAppValidation(result.validation); await refresh(); });
+              event.currentTarget.value = "";
+            }} /></label>
+            <BackupList artifacts={appBackups} selected={selectedApp} onSelect={(id) => { setSelectedApp(id); setAppValidation(null); setDryRun(null); setImportResult(null); }} onDownload={download} />
+          </div>
+        </section>
+        <section className="detail-card">
+          <header className="detail-card-header">
+            <div>
+              <h2 className="detail-card-title">Validate & Restore</h2>
+              <p className="detail-card-sub">Dry-run first, then merge overwrite with typed confirmation.</p>
+            </div>
+          </header>
+          <div className="detail-card-body">
+            <div className="backup-actions">
+              <button type="button" disabled={!selectedApp || !!busy} onClick={() => run("validate-app", async () => setAppValidation(await validateAppBackup(selectedApp, bundles)))}><Check size={14} /> Validate</button>
+              <button type="button" disabled={!selectedApp || !!busy} onClick={() => run("dry-run-app", async () => setDryRun(await dryRunAppBackup(selectedApp, bundles)))}><RefreshCw size={14} /> Dry run</button>
+            </div>
+            {appValidation && <ValidationSummary validation={appValidation} />}
+            {dryRun && <DryRunSummary dryRun={dryRun} />}
+            <div className="confirm-form">
+              <input value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Type RESTORE" />
+              <button type="button" className="danger-button" disabled={!selectedApp || confirm !== "RESTORE" || !!busy} onClick={() => run("import-app", async () => setImportResult(await importAppBackup(selectedApp, bundles, confirm)))}><AlertTriangle size={14} /> Restore ACE3 data</button>
+            </div>
+            {importResult && <pre className="backup-output">Imported at {new Date(importResult.imported_at).toLocaleString()}{`\n`}Pre-restore backup: {importResult.pre_restore_backup.filename}</pre>}
+          </div>
+        </section>
+      </div>
+    )}
+  </Panel>;
+}
+
+function BackupList({ artifacts, selected, onSelect, onDownload }: {
+  artifacts: BackupArtifact[];
+  selected: string;
+  onSelect: (id: string) => void;
+  onDownload: (artifact: BackupArtifact) => void;
+}) {
+  if (artifacts.length === 0) return <p className="muted">No backup artifacts yet.</p>;
+  return <div className="backup-list">
+    {artifacts.map((artifact) => <button type="button" key={artifact.id} className={selected === artifact.id ? "backup-row active" : "backup-row"} onClick={() => onSelect(artifact.id)}>
+      <span><strong>{artifact.filename}</strong><em>{new Date(artifact.created_at).toLocaleString()} · {formatBytes(artifact.size_bytes)}</em></span>
+      <Download size={14} onClick={(event) => { event.stopPropagation(); onDownload(artifact); }} />
+    </button>)}
+  </div>;
+}
+
+function ValidationSummary({ validation }: { validation: AppBackupValidation }) {
+  return <div className={validation.ok ? "backup-summary ok" : "backup-summary bad"}>
+    <strong>{validation.ok ? "Valid ACE3 export" : "Validation failed"}</strong>
+    <span>Effective bundles: {validation.effective_bundles.join(", ") || "none"}</span>
+    {[...validation.warnings, ...validation.errors].map((message) => <em key={message}>{message}</em>)}
+  </div>;
+}
+
+function DryRunSummary({ dryRun }: { dryRun: AppBackupDryRun }) {
+  return <div className="backup-summary ok">
+    <strong>Dry-run summary</strong>
+    {dryRun.tables.map((table) => <span key={table.table}>{table.table}: {table.insert} insert, {table.update} update</span>)}
+  </div>;
+}
+
+function summaryFullValidation(validation: { ok: boolean; warnings: string[]; artifact: BackupArtifact }) {
+  return `${validation.ok ? "Valid full database backup" : "Backup has warnings"}\n${validation.artifact.filename}\n${validation.warnings.join("\n") || "No warnings."}`;
+}
+
+function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function SkillTree({ node, onOpen }: { node: SkillTreeEntry; onOpen: (path: string) => void }) {

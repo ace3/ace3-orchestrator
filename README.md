@@ -89,10 +89,21 @@ Docker uses named volumes:
 - `mini-paperclip_mp_pgdata`
 - `mini-paperclip_mp_skills_cache`
 - `mini-paperclip_mp_worktrees`
+- `mini-paperclip_mp_backups`
 
 `docker compose down` preserves those volumes. `docker compose down -v` removes them and is destructive.
 
 Skill content is Git/file-cache owned. The database stores skill sources, pinned refs, discovered skill metadata, ignored state, and agent assignments; it does not store full skill bundles. Hosted deployments must keep `MP_SKILLS_CACHE_DIR` on persistent storage, such as the `mini-paperclip_mp_skills_cache` volume above. App restart does not delete the cache, but replacing a container without a persistent cache volume will require an admin sync to fetch pinned skill files again.
+
+### Backup & restore
+
+The Admin UI includes `Backup & Restore`.
+
+- Full database backups run server-side with `pg_dump` and are stored under `MP_BACKUP_DIR`.
+- Full database restore is operator-run only. The UI validates a dump and generates `pg_restore` instructions, but it never executes restore from the browser.
+- ACE3 application data can be exported/imported as versioned JSON bundles. Import uses merge overwrite, creates an automatic pre-restore backup, blocks while runs or wakeups are active, and runs in one transaction.
+
+PostgreSQL backups do not include the Git/file skill cache. Keep `MP_SKILLS_CACHE_DIR` on persistent storage or recover it with skill sync after restoring the database.
 
 Normal hosted skill operations should use the authenticated Admin UI/API. Make targets are local/server wrappers over the same API behavior:
 

@@ -156,6 +156,50 @@ the agent prompt. CLI session resume is best-effort: if Claude or Codex emits a
 session id, it is saved in `agent_runtime_state`; if no session id is reported,
 the run log gets a warning and the next run starts without CLI resume continuity.
 
+## Backup & Restore
+
+Backup artifacts live under `MP_BACKUP_DIR`.
+
+List and download artifacts:
+
+- `GET /api/backups`
+- `GET /api/backups/{backup_id}/download`
+
+Full database lane:
+
+- `POST /api/backups/full` creates a PostgreSQL custom-format `pg_dump`.
+- `POST /api/backups/full/upload` accepts multipart field `backup`.
+- `POST /api/backups/full/validate` validates an existing full backup.
+- `POST /api/backups/full/restore-plan` returns operator instructions and a `pg_restore` command.
+
+```json
+{"backup_id": "full-db-20260519T010203Z.dump"}
+```
+
+The API never executes full database restore. Operators must run the returned command on the server after stopping writers and taking an out-of-band backup.
+
+ACE3 application data lane:
+
+- `POST /api/backups/app/export` creates a versioned JSON export.
+- `POST /api/backups/app/upload` accepts multipart field `backup`.
+- `POST /api/backups/app/validate` validates bundle selection and dependencies.
+- `POST /api/backups/app/dry-run` returns insert/update counts.
+- `POST /api/backups/app/import` performs merge-overwrite import when `confirm` is `RESTORE`.
+
+```json
+{
+  "backup_id": "ace3-app-20260519T010203Z.json",
+  "bundles": ["configuration", "projects", "tasks", "execution_history"],
+  "confirm": "RESTORE"
+}
+```
+
+Bundles are `configuration`, `projects`, `tasks`, and `execution_history`.
+Partial restores are dependency-aware; missing dependency bundles fail validation
+or are included from the export. Import creates a pre-restore ACE3 JSON backup,
+blocks while runs or wakeups are active, uses one transaction, and normalizes
+queued/running imported execution state so old work is not restarted.
+
 ## Task Artifacts
 
 Artifacts store durable task context for PM documents, handoffs, engineering plans, QA reports, implementation notes, and run logs.

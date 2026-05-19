@@ -19,6 +19,7 @@ type Config struct {
 	ContainerCodeDir string
 	SkillsCacheDir   string
 	WorktreesDir     string
+	BackupDir        string
 	RunnerMode       string
 	CLITimeout       time.Duration
 	RunMaxUSD        float64
@@ -41,6 +42,7 @@ func Load() Config {
 		ContainerCodeDir: containerCodeDir,
 		SkillsCacheDir:   env("MP_SKILLS_CACHE_DIR", "/tmp/mini-paperclip/skills-cache"),
 		WorktreesDir:     env("MP_WORKTREES_DIR", "/tmp/mini-paperclip/worktrees"),
+		BackupDir:        env("MP_BACKUP_DIR", "/tmp/mini-paperclip/backups"),
 		RunnerMode:       env("MP_RUNNER_MODE", "cli"),
 		CLITimeout:       durationEnv("MP_CLI_TIMEOUT", 600*time.Second),
 		RunMaxUSD:        floatEnv("MP_RUN_MAX_USD", 1.0),

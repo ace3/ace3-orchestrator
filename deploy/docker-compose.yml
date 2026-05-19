@@ -40,11 +40,13 @@ services:
       MP_CONTAINER_CODE_DIR: /host/code
       MP_SKILLS_CACHE_DIR: /var/lib/mini-paperclip/skills-cache
       MP_WORKTREES_DIR: /var/lib/mini-paperclip/worktrees
+      MP_BACKUP_DIR: /var/lib/mini-paperclip/backups
       MP_RUNNER_MODE: ${MP_RUNNER_MODE}
       MP_API_TOKEN: ${MP_API_TOKEN}
     volumes:
       - mp_skills_cache:/var/lib/mini-paperclip/skills-cache
       - mp_worktrees:/var/lib/mini-paperclip/worktrees
+      - mp_backups:/var/lib/mini-paperclip/backups
       - ${HOST_CODE_DIR}:/host/code:rw
       - ${HOST_CLAUDE_DIR}:/root/.claude:ro
       - ${HOST_CODEX_DIR}:/root/.config/codex:ro
@@ -63,3 +65,4 @@ volumes:
   mp_pgdata:
   mp_skills_cache:
   mp_worktrees:
+  mp_backups:

@@ -260,6 +260,59 @@ export type OrchestratorMap = {
   lifecycles: OrchestratorMapLifecycle[];
 };
 
+export type BackupKind = "full_db" | "ace3_app";
+
+export type BackupArtifact = {
+  id: string;
+  kind: BackupKind;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+  download_url: string;
+};
+
+export type FullBackupValidation = {
+  ok: boolean;
+  artifact: BackupArtifact;
+  warnings: string[];
+};
+
+export type FullRestorePlan = {
+  artifact: BackupArtifact;
+  command: string;
+  runbook: string;
+};
+
+export type AppBackupValidation = {
+  ok: boolean;
+  version: number;
+  available_bundles: string[];
+  selected_bundles: string[];
+  effective_bundles: string[];
+  warnings: string[];
+  errors: string[];
+};
+
+export type AppBackupTableDiff = {
+  table: string;
+  insert: number;
+  update: number;
+  skipped: number;
+};
+
+export type AppBackupDryRun = {
+  validation: AppBackupValidation;
+  tables: AppBackupTableDiff[];
+  warnings: string[];
+};
+
+export type AppBackupImportResult = {
+  pre_restore_backup: BackupArtifact;
+  dry_run: AppBackupDryRun;
+  imported_at: string;
+};
+
 function resolveAPIBase() {
   const configured = (import.meta.env.VITE_API_BASE || "").trim();
   if (configured === "" || configured === "/") {
@@ -286,7 +339,7 @@ export function eventsURL() {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${getToken()}`);
-  if (init.body && !headers.has("Content-Type")) {
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
@@ -310,8 +363,45 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
+export async function apiUpload<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.set("backup", file);
+  return api<T>(path, { method: "POST", body: form });
+}
+
+export async function downloadBackupArtifact(artifact: BackupArtifact): Promise<void> {
+  const headers = new Headers();
+  headers.set("Authorization", `Bearer ${getToken()}`);
+  const response = await fetch(`${API_BASE}/backups/${encodeURIComponent(artifact.id)}/download`, { headers });
+  if (!response.ok) {
+    throw new Error(response.statusText);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = artifact.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export const getBootstrapStatus = () => api<BootstrapStatus>("/bootstrap-status");
 export const runBootstrap = () => api<BootstrapStatus>("/bootstrap/run", { method: "POST" });
+export const listBackups = () => api<BackupArtifact[]>("/backups");
+export const createFullBackup = () => api<BackupArtifact>("/backups/full", { method: "POST" });
+export const uploadFullBackup = (file: File) => apiUpload<{ artifact: BackupArtifact; validation: FullBackupValidation }>("/backups/full/upload", file);
+export const validateFullBackup = (backupId: string) => api<FullBackupValidation>("/backups/full/validate", { method: "POST", body: JSON.stringify({ backup_id: backupId }) });
+export const fullRestorePlan = (backupId: string) => api<FullRestorePlan>("/backups/full/restore-plan", { method: "POST", body: JSON.stringify({ backup_id: backupId }) });
+export const exportAppBackup = (bundles: string[]) => api<BackupArtifact>("/backups/app/export", { method: "POST", body: JSON.stringify({ bundles }) });
+export const uploadAppBackup = (file: File) => apiUpload<{ artifact: BackupArtifact; validation: AppBackupValidation }>("/backups/app/upload", file);
+export const validateAppBackup = (backupId: string, bundles: string[]) => api<AppBackupValidation>("/backups/app/validate", { method: "POST", body: JSON.stringify({ backup_id: backupId, bundles }) });
+export const dryRunAppBackup = (backupId: string, bundles: string[]) => api<AppBackupDryRun>("/backups/app/dry-run", { method: "POST", body: JSON.stringify({ backup_id: backupId, bundles }) });
+export const importAppBackup = (backupId: string, bundles: string[], confirm: string) => api<AppBackupImportResult>("/backups/app/import", { method: "POST", body: JSON.stringify({ backup_id: backupId, bundles, confirm }) });
 export const listAgents = () => api<Agent[]>("/agents");
 export const getAgent = (id: string) => api<Agent>(`/agents/${id}`);
 export const createAgent = (body: Partial<Agent> & { skill_ids?: string[] }) => api<Agent>("/agents", { method: "POST", body: JSON.stringify(body) });

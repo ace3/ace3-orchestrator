@@ -9,7 +9,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/mini-paperclip ./cmd/mini-papercli
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates git nodejs npm \
+RUN apk add --no-cache ca-certificates git nodejs npm postgresql-client \
     && npm install -g @anthropic-ai/claude-code@2.1.143 @openai/codex@0.130.0 \
     && npm cache clean --force
 COPY --from=build /out/mini-paperclip /usr/local/bin/mini-paperclip

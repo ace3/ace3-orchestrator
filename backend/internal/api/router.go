@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"mini-paperclip/backend/internal/auth"
+	"mini-paperclip/backend/internal/backup"
 	"mini-paperclip/backend/internal/bootstrap"
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/fsutil"
@@ -21,6 +22,7 @@ import (
 type API struct {
 	cfg        config.Config
 	store      *store.Store
+	backups    *backup.Service
 	bootstrap  *bootstrap.Service
 	orch       *orchestrator.Orchestrator
 	lifecycles *lifecycles.Service
@@ -36,7 +38,11 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 	if len(lifecycleServices) > 0 {
 		lifecycleService = lifecycleServices[0]
 	}
-	api := &API{cfg: cfg, store: st, bootstrap: bs, orch: orch, lifecycles: lifecycleService}
+	var backupService *backup.Service
+	if st != nil {
+		backupService = backup.New(st.DB(), cfg.DBDSN, cfg.BackupDir)
+	}
+	api := &API{cfg: cfg, store: st, backups: backupService, bootstrap: bs, orch: orch, lifecycles: lifecycleService}
 	r := chi.NewRouter()
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -46,6 +52,17 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Use(auth.Bearer(cfg.APIToken))
 		r.Get("/bootstrap-status", api.bootstrapStatus)
 		r.Post("/bootstrap/run", api.bootstrapRun)
+		r.Get("/backups", api.listBackups)
+		r.Get("/backups/{id}/download", api.downloadBackup)
+		r.Post("/backups/full", api.createFullBackup)
+		r.Post("/backups/full/upload", api.uploadFullBackup)
+		r.Post("/backups/full/validate", api.validateFullBackup)
+		r.Post("/backups/full/restore-plan", api.fullRestorePlan)
+		r.Post("/backups/app/export", api.exportAppBackup)
+		r.Post("/backups/app/upload", api.uploadAppBackup)
+		r.Post("/backups/app/validate", api.validateAppBackup)
+		r.Post("/backups/app/dry-run", api.dryRunAppBackup)
+		r.Post("/backups/app/import", api.importAppBackup)
 		r.Get("/agents", api.listAgents)
 		r.Post("/agents", api.createAgent)
 		r.Get("/agents/{id}", api.getAgent)
@@ -376,6 +393,8 @@ func respond(w http.ResponseWriter, value any, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, backup.ErrValidation):
+		httpx.Error(w, http.StatusBadRequest, "validation_failed", err.Error())
 	case errors.Is(err, store.ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, "not_found", "resource not found")
 	case errors.Is(err, store.ErrConflict):
