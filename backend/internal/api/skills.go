@@ -192,7 +192,7 @@ type orchestratorMapResponse struct {
 	Sources    []models.SkillSource   `json:"sources"`
 	Skills     []orchestratorMapSkill `json:"skills"`
 	Agents     []orchestratorMapAgent `json:"agents"`
-	Lifecycles []repoconfig.Lifecycle `json:"lifecycles"`
+	Lifecycles []models.Lifecycle     `json:"lifecycles"`
 }
 
 type orchestratorMapSkill struct {
@@ -278,7 +278,12 @@ func (a *API) orchestratorMap(w http.ResponseWriter, r *http.Request) {
 			RecommendedSkills: uniqueStrings(recommendedByAgent[agent.ID]),
 		})
 	}
-	respond(w, orchestratorMapResponse{Sources: sources, Skills: mapSkills, Agents: agents, Lifecycles: cfg.Lifecycles}, nil)
+	lifecycles, err := a.store.ListLifecycles(r.Context())
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	respond(w, orchestratorMapResponse{Sources: sources, Skills: mapSkills, Agents: agents, Lifecycles: lifecycles}, nil)
 }
 
 func uniqueStrings(values []string) []string {

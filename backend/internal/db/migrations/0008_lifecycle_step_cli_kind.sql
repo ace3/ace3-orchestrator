@@ -1,0 +1,2 @@
+ALTER TABLE lifecycle_steps
+    ADD COLUMN IF NOT EXISTS cli_kind TEXT NOT NULL DEFAULT '';

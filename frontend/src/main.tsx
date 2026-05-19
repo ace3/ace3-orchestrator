@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, Github, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
+import { Bot, Boxes, Check, FileText, FolderGit2, GitBranch, Github, GripVertical, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2 } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
@@ -12,8 +12,11 @@ import {
   Run,
   RunEvent,
   Skill,
+  SkillDriftReport,
   SkillTreeEntry,
   SkillSource,
+  Lifecycle,
+  LifecycleStep,
   Task,
   TaskArtifact,
   TaskInteraction,
@@ -21,12 +24,16 @@ import {
   addComment,
   addRepo,
   acceptInteraction,
+  checkSkillDrift,
+  checkSkillSourceUpdates,
   createAgent,
+  createLifecycle,
   createSkillSource,
   createTaskArtifact,
   createProject,
   createTask,
   deleteAgent,
+  deleteLifecycle,
   deleteSkillSource,
   deleteTaskArtifact,
   deleteProject,
@@ -34,6 +41,9 @@ import {
   duplicateAgent,
   eventsURL,
   getAgent,
+  getDefaultModel,
+  getLifecycle,
+  getLifecycleTagVocabulary,
   getTaskLiveness,
   getBootstrapStatus,
   getOrchestratorMap,
@@ -44,6 +54,7 @@ import {
   heartbeat,
   importGitHubSkill,
   listAgents,
+  listLifecycles,
   listComments,
   listInteractions,
   listInstalledSkills,
@@ -59,21 +70,24 @@ import {
   runTask,
   rejectInteraction,
   setAgentEnabled,
+  setDefaultModel,
   setToken,
   syncSkillSource,
   updateAgent,
+  updateLifecycle,
   updateSkill,
   updateTaskArtifact,
   updateTask,
   updateProject
 } from "./lib/api";
 
-type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent-new" | "agent" | "skills" | "map";
+type Route = "bootstrap" | "projects" | "project" | "board" | "agents" | "agent-new" | "agent" | "lifecycles" | "lifecycle-new" | "lifecycle" | "skills" | "map";
 
 type RouteState = {
   route: Route;
   projectId: string | null;
   agentId: string | null;
+  lifecycleId: string | null;
 };
 
 type BootstrapState =
@@ -83,15 +97,18 @@ type BootstrapState =
 
 function routeFromPath(pathname = window.location.pathname): RouteState {
   const parts = pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
-  if (parts[0] === "bootstrap") return { route: "bootstrap", projectId: null, agentId: null };
-  if (parts[0] === "projects" && parts[1] && parts[2] === "board") return { route: "board", projectId: parts[1], agentId: null };
-  if (parts[0] === "projects" && parts[1]) return { route: "project", projectId: parts[1], agentId: null };
-  if (parts[0] === "agents" && parts[1] === "new") return { route: "agent-new", projectId: null, agentId: null };
-  if (parts[0] === "agents" && parts[1]) return { route: "agent", projectId: null, agentId: parts[1] };
-  if (parts[0] === "agents") return { route: "agents", projectId: null, agentId: null };
-  if (parts[0] === "skills") return { route: "skills", projectId: null, agentId: null };
-  if (parts[0] === "map") return { route: "map", projectId: null, agentId: null };
-  return { route: "projects", projectId: null, agentId: null };
+  if (parts[0] === "bootstrap") return { route: "bootstrap", projectId: null, agentId: null, lifecycleId: null };
+  if (parts[0] === "projects" && parts[1] && parts[2] === "board") return { route: "board", projectId: parts[1], agentId: null, lifecycleId: null };
+  if (parts[0] === "projects" && parts[1]) return { route: "project", projectId: parts[1], agentId: null, lifecycleId: null };
+  if (parts[0] === "agents" && parts[1] === "new") return { route: "agent-new", projectId: null, agentId: null, lifecycleId: null };
+  if (parts[0] === "agents" && parts[1]) return { route: "agent", projectId: null, agentId: parts[1], lifecycleId: null };
+  if (parts[0] === "agents") return { route: "agents", projectId: null, agentId: null, lifecycleId: null };
+  if (parts[0] === "lifecycles" && parts[1] === "new") return { route: "lifecycle-new", projectId: null, agentId: null, lifecycleId: null };
+  if (parts[0] === "lifecycles" && parts[1]) return { route: "lifecycle", projectId: null, agentId: null, lifecycleId: parts[1] };
+  if (parts[0] === "lifecycles") return { route: "lifecycles", projectId: null, agentId: null, lifecycleId: null };
+  if (parts[0] === "skills") return { route: "skills", projectId: null, agentId: null, lifecycleId: null };
+  if (parts[0] === "map") return { route: "map", projectId: null, agentId: null, lifecycleId: null };
+  return { route: "projects", projectId: null, agentId: null, lifecycleId: null };
 }
 
 function pathForRoute(next: Route, id?: string) {
@@ -102,6 +119,9 @@ function pathForRoute(next: Route, id?: string) {
     case "agents": return "/agents";
     case "agent-new": return "/agents/new";
     case "agent": return id ? `/agents/${encodeURIComponent(id)}` : "/agents";
+    case "lifecycles": return "/lifecycles";
+    case "lifecycle-new": return "/lifecycles/new";
+    case "lifecycle": return id ? `/lifecycles/${encodeURIComponent(id)}` : "/lifecycles";
     case "skills": return "/skills";
     case "map": return "/map";
     case "projects":
@@ -170,12 +190,14 @@ function App() {
   const [route, setRoute] = useState<Route>(initialRoute.route);
   const [projectId, setProjectId] = useState<string | null>(initialRoute.projectId);
   const [agentId, setAgentId] = useState<string | null>(initialRoute.agentId);
+  const [lifecycleId, setLifecycleId] = useState<string | null>(initialRoute.lifecycleId);
   const [token, updateToken] = useState(getToken());
   const [bootstrapState, setBootstrapState] = useState<BootstrapState>({ phase: "loading" });
 
   function applyRoute(next: RouteState) {
     setProjectId(next.projectId);
     setAgentId(next.agentId);
+    setLifecycleId(next.lifecycleId);
     setRoute(next.route);
   }
 
@@ -221,6 +243,7 @@ function App() {
         {showBootstrapNav && <button className={route === "bootstrap" ? "active" : ""} onClick={() => navigate("bootstrap")}>Bootstrap</button>}
         <button className={route === "projects" || route === "project" || route === "board" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
         <button className={route === "agents" || route === "agent-new" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
+        <button className={route === "lifecycles" || route === "lifecycle-new" || route === "lifecycle" ? "active" : ""} onClick={() => navigate("lifecycles")}><GitBranch size={16} /> Lifecycles</button>
         <button className={route === "skills" ? "active" : ""} onClick={() => navigate("skills")}><RefreshCw size={16} /> Skill Sources</button>
         <button className={route === "map" ? "active" : ""} onClick={() => navigate("map")}><GitBranch size={16} /> Map</button>
         <div className="sidebar-footer">
@@ -236,6 +259,9 @@ function App() {
         {route === "agents" && <AgentsPage openAgent={(id) => navigate("agent", id)} openAddAgent={() => navigate("agent-new")} />}
         {route === "agent-new" && <AgentCreatePage onCreated={(id) => navigate("agent", id)} onCancel={() => navigate("agents")} onOpenAgents={() => navigate("agents")} />}
         {route === "agent" && agentId && <AgentDetailPage id={agentId} onSaved={(id) => navigate("agent", id)} onOpenAgents={() => navigate("agents")} />}
+        {route === "lifecycles" && <LifecyclesPage openLifecycle={(id) => navigate("lifecycle", id)} openAddLifecycle={() => navigate("lifecycle-new")} />}
+        {route === "lifecycle-new" && <LifecycleCreatePage onCreated={(id) => navigate("lifecycle", id)} onCancel={() => navigate("lifecycles")} onOpenLifecycles={() => navigate("lifecycles")} />}
+        {route === "lifecycle" && lifecycleId && <LifecycleDetailPage id={lifecycleId} onSaved={(id) => navigate("lifecycle", id)} onOpenLifecycles={() => navigate("lifecycles")} />}
         {route === "skills" && <SkillSourcesPage />}
         {route === "map" && <MapPage />}
       </section>
@@ -603,12 +629,45 @@ type TaskFormValues = {
   status: Task["status"];
 };
 
-function TaskModal({ open, mode, initial, defaultStatus, agents, onClose, onSubmit }: {
+function parseTags(value: string): string[] {
+  return value.split(",").map((tag) => tag.trim()).filter(Boolean);
+}
+
+function setTagEnabled(value: string, tag: string, enabled: boolean): string {
+  const normalized = tag.trim();
+  const tags = parseTags(value);
+  const exists = tags.some((item) => item.toLowerCase() === normalized.toLowerCase());
+  if (enabled && !exists) return [...tags, normalized].join(", ");
+  if (!enabled) return tags.filter((item) => item.toLowerCase() !== normalized.toLowerCase()).join(", ");
+  return tags.join(", ");
+}
+
+function lifecyclePreview(lifecycle: Lifecycle | undefined, tags: string): string {
+  if (!lifecycle) return "";
+  const tagSet = new Set(parseTags(tags).map((tag) => tag.toLowerCase()));
+  const run = lifecycle.steps
+    .slice()
+    .sort((a, b) => a.position - b.position)
+    .filter((step) => stepRuns(step, tagSet))
+    .map((step) => step.agent_id);
+  if (run.length === 0) return "With these tags, this task will run: no lifecycle steps.";
+  return `With these tags, this task will run: ${run.join(" → ")}.`;
+}
+
+function stepRuns(step: Pick<LifecycleStep, "skip_when" | "include_when">, tagSet: Set<string>): boolean {
+  const skipped = (step.skip_when || []).some((tag) => tag.toLowerCase() === "always" || tagSet.has(tag.toLowerCase()));
+  if (skipped) return false;
+  if (!step.include_when || step.include_when.length === 0) return true;
+  return step.include_when.some((tag) => tagSet.has(tag.toLowerCase()));
+}
+
+function TaskModal({ open, mode, initial, defaultStatus, agents, lifecycles, onClose, onSubmit }: {
   open: boolean;
   mode: "create" | "edit";
   initial?: Partial<Task>;
   defaultStatus?: Task["status"];
   agents: Agent[];
+  lifecycles: Lifecycle[];
   onClose: () => void;
   onSubmit: (values: TaskFormValues) => Promise<void>;
 }) {
@@ -617,6 +676,7 @@ function TaskModal({ open, mode, initial, defaultStatus, agents, onClose, onSubm
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [tagVocabulary, setTagVocabulary] = useState<string[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -632,6 +692,13 @@ function TaskModal({ open, mode, initial, defaultStatus, agents, onClose, onSubm
       status: (initial?.status as Task["status"]) || defaultStatus || "todo",
     });
   }, [open, initial, defaultStatus, agents]);
+
+  useEffect(() => {
+    if (!open || !values.lifecycle_id) return;
+    getLifecycleTagVocabulary(values.lifecycle_id)
+      .then((result) => setTagVocabulary(result.tags))
+      .catch(() => setTagVocabulary([]));
+  }, [open, values.lifecycle_id]);
 
   const title = mode === "edit"
     ? "Edit task"
@@ -695,9 +762,7 @@ function TaskModal({ open, mode, initial, defaultStatus, agents, onClose, onSubm
           <label className="field">
             <span className="field-label">Lifecycle</span>
             <select value={values.lifecycle_id} onChange={(e) => setValues({ ...values, lifecycle_id: e.target.value })}>
-              <option value="default">Default</option>
-              <option value="backend-only">Backend only</option>
-              <option value="frontend-only">Frontend only</option>
+              {lifecycles.map((lifecycle) => <option key={lifecycle.id} value={lifecycle.id}>{lifecycle.id}</option>)}
             </select>
           </label>
           <label className="field">
@@ -707,6 +772,21 @@ function TaskModal({ open, mode, initial, defaultStatus, agents, onClose, onSubm
         </div>
         <label className="field">
           <span className="field-label">Tags</span>
+          {tagVocabulary.length > 0 && (
+            <div className="tag-toggle-row">
+              {tagVocabulary.map((tag) => {
+                const active = parseTags(values.tags).some((item) => item.toLowerCase() === tag.toLowerCase());
+                return <button
+                  key={tag}
+                  type="button"
+                  className={active ? "tag-toggle active" : "tag-toggle"}
+                  aria-pressed={active}
+                  onClick={() => setValues({ ...values, tags: setTagEnabled(values.tags, tag, !active) })}
+                >{tag}</button>;
+              })}
+            </div>
+          )}
+          <p className="route-preview">{lifecyclePreview(lifecycles.find((lifecycle) => lifecycle.id === values.lifecycle_id), values.tags)}</p>
           <input placeholder="comma-separated" value={values.tags} onChange={(e) => setValues({ ...values, tags: e.target.value })} />
         </label>
       </form>
@@ -783,6 +863,7 @@ function ColumnMenu({ collapsed, onAdd, onToggleCollapsed, onSort }: {
 function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenProjects: () => void; onOpenProject: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [lifecycles, setLifecycles] = useState<Lifecycle[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => readStatusFilter());
@@ -796,6 +877,7 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
   useEffect(() => {
     getProject(id).then(setProject).catch((e) => setError(e.message));
     listAgents().then(setAgents).catch((e) => setError(e.message));
+    listLifecycles().then(setLifecycles).catch((e) => setError(e.message));
     listTasks(id).then(setTasks).catch((e) => setError(e.message));
     const events = new EventSource(eventsURL());
     events.addEventListener("mp_events", () => listTasks(id).then(setTasks).catch(() => undefined));
@@ -967,6 +1049,7 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
       initial={modalInitial}
       defaultStatus={modalDefaultStatus}
       agents={agents}
+      lifecycles={lifecycles}
       onClose={() => setModalOpen(false)}
       onSubmit={submitModal}
     />
@@ -1453,6 +1536,329 @@ function AgentDetailPage({ id, onSaved, onOpenAgents }: { id: string; onSaved: (
   </Panel>;
 }
 
+type LifecycleEditorStep = Pick<LifecycleStep, "id" | "agent_id" | "cli_kind" | "skip_when" | "include_when" | "model_id">;
+
+const skipTagExamples = ["backend-only", "frontend-only", "skip-qa", "always"];
+const includeTagExamples = ["has-ui", "needs-api", "needs-review"];
+const modelExamples = ["claude-sonnet-4-6", "claude-opus-4-6", "gpt-5.3-codex"];
+
+function csvTags(value: string): string[] {
+  return value.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+}
+
+function lifecycleCLIKind(value: string): LifecycleEditorStep["cli_kind"] {
+  return value === "codex" || value === "claude" ? value : "";
+}
+
+function mergeTags(current: string[], additions: string[]): string[] {
+  const seen = new Set<string>();
+  return [...current, ...additions]
+    .map((tag) => tag.trim().toLowerCase())
+    .filter((tag) => {
+      if (!tag || seen.has(tag)) return false;
+      seen.add(tag);
+      return true;
+    });
+}
+
+function LifecycleFlow({ lifecycle }: { lifecycle: Lifecycle }) {
+  const steps = lifecycle.steps.slice().sort((a, b) => a.position - b.position);
+  if (steps.length === 0) return <span>No steps</span>;
+  return <div className="map-flow">{steps.map((step, index) => <React.Fragment key={step.id || `${step.agent_id}-${index}`}>
+    {index > 0 && <em>→</em>}
+    <span>{step.agent_id}{step.cli_kind ? ` · ${step.cli_kind}` : ""}</span>
+  </React.Fragment>)}</div>;
+}
+
+function LifecyclesPage({ openLifecycle, openAddLifecycle }: { openLifecycle: (id: string) => void; openAddLifecycle: () => void }) {
+  const [lifecycles, setLifecycles] = useState<Lifecycle[]>([]);
+  const [defaultModel, setDefaultModelValue] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    const [nextLifecycles, model] = await Promise.all([listLifecycles(), getDefaultModel()]);
+    setLifecycles(nextLifecycles);
+    setDefaultModelValue(model.value);
+  }
+
+  useEffect(() => { refresh().catch((e) => setError(e.message)); }, []);
+
+  async function saveDefaultModel() {
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await setDefaultModel(defaultModel);
+      setDefaultModelValue(saved.value);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  async function removeLifecycle(lifecycle: Lifecycle) {
+    setBusy(true);
+    setError("");
+    try {
+      await deleteLifecycle(lifecycle.id);
+      await refresh();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  return <Panel title="Lifecycles">
+    <Error text={error} />
+    <div className="board-toolbar">
+      <div className="default-model-row">
+        <label className="field">
+          <span className="field-label">Default model</span>
+          <input value={defaultModel} onChange={(e) => setDefaultModelValue(e.target.value)} placeholder="claude-sonnet-4-6" />
+        </label>
+        <button type="button" onClick={saveDefaultModel} disabled={busy || !defaultModel.trim()}><Save size={16} /> Save model</button>
+      </div>
+      <div className="board-toolbar-actions">
+        <button type="button" className="primary-button" onClick={openAddLifecycle}><Plus size={16} /> Add lifecycle</button>
+      </div>
+    </div>
+    <div className="list">
+      {lifecycles.map((lifecycle) => (
+        <article className="clickable" key={lifecycle.id} onClick={() => openLifecycle(lifecycle.id)}>
+          <div className="lifecycle-card-head">
+            <h3>{lifecycle.id}</h3>
+            {lifecycle.is_default && <span className="badge">Default</span>}
+          </div>
+          <p>{lifecycle.description || "No description"}</p>
+          <LifecycleFlow lifecycle={lifecycle} />
+          <div className="toolbar">
+            <button type="button" onClick={(e) => { e.stopPropagation(); openLifecycle(lifecycle.id); }}><Save size={16} /> Edit</button>
+            {!lifecycle.is_default && <button type="button" className="danger-button" onClick={(e) => { e.stopPropagation(); removeLifecycle(lifecycle); }}><Trash2 size={16} /> Delete</button>}
+          </div>
+        </article>
+      ))}
+      {lifecycles.length === 0 && <p className="empty-state">No lifecycles found.</p>}
+    </div>
+  </Panel>;
+}
+
+function LifecycleCreatePage({ onCreated, onCancel, onOpenLifecycles }: { onCreated: (id: string) => void; onCancel: () => void; onOpenLifecycles: () => void }) {
+  return <LifecycleEditorPage mode="create" onSaved={onCreated} onCancel={onCancel} onOpenLifecycles={onOpenLifecycles} />;
+}
+
+function LifecycleDetailPage({ id, onSaved, onOpenLifecycles }: { id: string; onSaved: (id: string) => void; onOpenLifecycles: () => void }) {
+  return <LifecycleEditorPage mode="edit" lifecycleId={id} onSaved={onSaved} onOpenLifecycles={onOpenLifecycles} />;
+}
+
+function LifecycleEditorPage({ mode, lifecycleId, onSaved, onCancel, onOpenLifecycles }: {
+  mode: "create" | "edit";
+  lifecycleId?: string;
+  onSaved: (id: string) => void;
+  onCancel?: () => void;
+  onOpenLifecycles: () => void;
+}) {
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [defaultModel, setDefaultModelValue] = useState("");
+  const [form, setForm] = useState({ id: "", description: "", is_default: false });
+  const [steps, setSteps] = useState<LifecycleEditorStep[]>([]);
+  const [initialSnapshot, setInitialSnapshot] = useState("");
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function load() {
+      const [nextAgents, model] = await Promise.all([listAgents(), getDefaultModel()]);
+      setAgents(nextAgents.filter((agent) => agent.enabled));
+      setDefaultModelValue(model.value);
+      if (mode === "edit" && lifecycleId) {
+        const lifecycle = await getLifecycle(lifecycleId);
+        const nextForm = { id: lifecycle.id, description: lifecycle.description, is_default: lifecycle.is_default };
+        const nextSteps = lifecycle.steps.slice().sort((a, b) => a.position - b.position).map((step) => ({
+          id: step.id,
+          agent_id: step.agent_id,
+          cli_kind: lifecycleCLIKind(step.cli_kind),
+          skip_when: step.skip_when || [],
+          include_when: step.include_when || [],
+          model_id: step.model_id || "",
+        }));
+        setForm(nextForm);
+        setSteps(nextSteps);
+        setInitialSnapshot(JSON.stringify({ form: nextForm, steps: nextSteps }));
+      } else {
+        const nextForm = { id: "", description: "", is_default: false };
+        const nextSteps = [{ id: "", agent_id: nextAgents.find((agent) => agent.enabled)?.id || "", cli_kind: "" as const, skip_when: [], include_when: [], model_id: "" }];
+        setForm(nextForm);
+        setSteps(nextSteps);
+        setInitialSnapshot("");
+      }
+    }
+    load().catch((e) => setError(e.message));
+  }, [mode, lifecycleId]);
+
+  const changed = mode === "create" || JSON.stringify({ form, steps }) !== initialSnapshot;
+
+  function updateStep(index: number, patch: Partial<LifecycleEditorStep>) {
+    setSteps((current) => current.map((step, i) => i === index ? { ...step, ...patch } : step));
+  }
+
+  function moveStep(from: number, to: number) {
+    if (from === to || to < 0 || to >= steps.length) return;
+    setSteps((current) => {
+      const next = current.slice();
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      return next;
+    });
+  }
+
+  function addStep() {
+    setSteps((current) => [...current, { id: "", agent_id: agents[0]?.id || "", cli_kind: "", skip_when: [], include_when: [], model_id: "" }]);
+  }
+
+  function addStepTags(index: number, field: "skip_when" | "include_when", tags: string[]) {
+    setSteps((current) => current.map((step, i) => i === index ? { ...step, [field]: mergeTags(step[field] || [], tags) } : step));
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    const body = {
+      id: form.id.trim(),
+      description: form.description,
+      steps: steps.map((step) => ({
+        id: step.id,
+        agent_id: step.agent_id,
+        cli_kind: step.cli_kind,
+        skip_when: step.skip_when,
+        include_when: step.include_when,
+        model_id: step.model_id,
+      })),
+    };
+    try {
+      const saved = mode === "edit" && lifecycleId
+        ? await updateLifecycle(lifecycleId, body)
+        : await createLifecycle(body);
+      onSaved(saved.id);
+    } catch (e2) { setError((e2 as Error).message); }
+    finally { setBusy(false); }
+  }
+
+  return <Panel title={mode === "edit" ? form.id || "Lifecycle" : "Add Lifecycle"} breadcrumb={[{ label: "Lifecycles", onClick: onOpenLifecycles }]}>
+    <form className="editor" onSubmit={submit}>
+      <Error text={error} />
+      <div className="form-grid">
+        <label className="field">
+          <span className="field-label">ID</span>
+          <input value={form.id} disabled={mode === "edit"} onChange={(e) => setForm({ ...form, id: e.target.value })} placeholder="qa-only" required />
+          <span className="field-help">Stable slug used by tasks. Examples: default, backend-only, full-stack-ui, qa-only.</span>
+        </label>
+        <label className="field">
+          <span className="field-label">Description</span>
+          <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Short lifecycle description" />
+          <span className="field-help">Describe the path in plain words, for example: PM → EM → Backend → Frontend → QA.</span>
+        </label>
+      </div>
+      {form.is_default && <p className="empty-state">Default lifecycle. It can be edited but not deleted.</p>}
+      <section className="workflow-help-panel" aria-label="Workflow guide">
+        <div>
+          <h2>How this workflow runs</h2>
+          <p>Steps run from top to bottom. After an agent finishes, the next step is selected from this list using the task tags.</p>
+        </div>
+        <div className="workflow-help-grid">
+          <div>
+            <strong>Skip when</strong>
+            <p>Comma-separated tags that disable the step when a task has any matching tag. Use <code>always</code> to turn a step off.</p>
+            <span>Example: <code>backend-only, no-frontend</code></span>
+          </div>
+          <div>
+            <strong>Include when</strong>
+            <p>Leave empty for normal steps. Fill it when a step is optional and should only run for matching task tags.</p>
+            <span>Example: frontend step with <code>has-ui</code></span>
+          </div>
+          <div>
+            <strong>Runner and model</strong>
+            <p>Runner chooses Codex or Claude for that step. Model is optional; empty uses the global default model.</p>
+            <span>Examples: <code>codex</code>, <code>claude</code>, <code>{modelExamples[0]}</code></span>
+          </div>
+        </div>
+        <div className="workflow-recipes">
+          <article>
+            <strong>Backend-only task</strong>
+            <span>Use PM → EM → Backend → QA. Put <code>backend-only</code> on the Frontend step's Skip when field.</span>
+          </article>
+          <article>
+            <strong>Optional UI work</strong>
+            <span>Keep the Frontend step, but put <code>has-ui</code> in Include when. The task form tag decides whether it runs.</span>
+          </article>
+          <article>
+            <strong>Disable a step</strong>
+            <span>Put <code>always</code> in Skip when. This is useful for temporarily turning QA or planning off.</span>
+          </article>
+        </div>
+      </section>
+      <h2 className="section-title">Steps</h2>
+      <div className="lifecycle-steps">
+        {steps.map((step, index) => (
+          <article
+            key={`${step.id || "new"}-${index}`}
+            className="lifecycle-step"
+            draggable
+            onDragStart={() => setDragIndex(index)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => { if (dragIndex !== null) moveStep(dragIndex, index); setDragIndex(null); }}
+          >
+            <div className="step-handle" title="Drag to reorder"><GripVertical size={16} /></div>
+            <div className="form-grid">
+              <label className="field">
+                <span className="field-label">Agent</span>
+                <select value={step.agent_id} onChange={(e) => updateStep(index, { agent_id: e.target.value })} required>
+                  <option value="">Select agent</option>
+                  {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} ({agent.id})</option>)}
+                </select>
+                <span className="field-help">The worker assigned when this step becomes active.</span>
+              </label>
+              <label className="field">
+                <span className="field-label">Runner</span>
+                <select value={step.cli_kind} onChange={(e) => updateStep(index, { cli_kind: e.target.value as LifecycleEditorStep["cli_kind"] })}>
+                  <option value="">Inherit project default</option>
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude</option>
+                </select>
+                <span className="field-help">Override the execution CLI for this step only.</span>
+              </label>
+              <label className="field">
+                <span className="field-label">Model</span>
+                <input value={step.model_id} onChange={(e) => updateStep(index, { model_id: e.target.value })} placeholder={`inherit default: ${defaultModel || "claude-sonnet-4-6"}`} />
+                <span className="field-help">Optional model override. Examples: {modelExamples.join(", ")}.</span>
+              </label>
+              <label className="field" title="Step is skipped if the task has any of these tags.">
+                <span className="field-label">Skip when</span>
+                <input value={(step.skip_when || []).join(", ")} onChange={(e) => updateStep(index, { skip_when: csvTags(e.target.value) })} placeholder="backend-only, always" />
+                <span className="field-help">If the task has one of these tags, this step is skipped.</span>
+                <span className="example-row">
+                  {skipTagExamples.map((tag) => <button key={tag} type="button" onClick={() => addStepTags(index, "skip_when", [tag])}>{tag}</button>)}
+                </span>
+              </label>
+              <label className="field" title="Empty means always considered. Otherwise the step runs only if the task has at least one of these tags.">
+                <span className="field-label">Include when</span>
+                <input value={(step.include_when || []).join(", ")} onChange={(e) => updateStep(index, { include_when: csvTags(e.target.value) })} placeholder="has-ui" />
+                <span className="field-help">Empty means normal. If filled, the task must have at least one of these tags.</span>
+                <span className="example-row">
+                  {includeTagExamples.map((tag) => <button key={tag} type="button" onClick={() => addStepTags(index, "include_when", [tag])}>{tag}</button>)}
+                </span>
+              </label>
+            </div>
+            <button type="button" className="danger-button" onClick={() => setSteps((current) => current.filter((_, i) => i !== index))}><Trash2 size={16} /></button>
+          </article>
+        ))}
+      </div>
+      <div className="toolbar">
+        <button type="button" onClick={addStep}><Plus size={16} /> Add step</button>
+        <button disabled={busy || !changed || !form.id.trim() || steps.length === 0}><Save size={16} /> Save</button>
+        {onCancel && <button type="button" onClick={onCancel}>Cancel</button>}
+      </div>
+    </form>
+  </Panel>;
+}
+
 function relativeTime(iso: string | null): string {
   if (!iso) return "never";
   const then = new Date(iso).getTime();
@@ -1686,6 +2092,7 @@ function SkillSourcesPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
   const [pinTarget, setPinTarget] = useState<SkillSource | null>(null);
+  const [driftReport, setDriftReport] = useState<SkillDriftReport | null>(null);
 
   async function refresh() {
     const [nextSources, nextSkills, nextAgents, nextMap] = await Promise.all([
@@ -1826,6 +2233,22 @@ function SkillSourcesPage() {
     } catch (e) { setError((e as Error).message); }
     finally { setBusy((prev) => { const { [source.id]: _, ...rest } = prev; return rest; }); }
   }
+  async function handleDriftCheck() {
+    setError("");
+    setBusy((prev) => ({ ...prev, __drift__: "checking" }));
+    try { setDriftReport(await checkSkillDrift()); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy((prev) => { const { __drift__: _, ...rest } = prev; return rest; }); }
+  }
+  async function handleUpdateCheck() {
+    setError("");
+    setBusy((prev) => ({ ...prev, __updates__: "checking" }));
+    try {
+      const nextSources = await checkSkillSourceUpdates();
+      setSources(nextSources);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy((prev) => { const { __updates__: _, ...rest } = prev; return rest; }); }
+  }
 
   const totalSkills = skills.length;
   const ignoredSkills = skills.filter((skill) => skill.ignored).length;
@@ -1844,10 +2267,47 @@ function SkillSourcesPage() {
         {recommendedCount > 0 && <span><strong>{recommendedCount}</strong> recommended</span>}
       </div>
       <div className="board-toolbar-actions">
+        <button type="button" onClick={handleDriftCheck} disabled={!!busy.__drift__}>
+          <RefreshCw size={16} /> {busy.__drift__ ? "Checking" : "Check drift"}
+        </button>
+        <button type="button" onClick={handleUpdateCheck} disabled={!!busy.__updates__}>
+          <RefreshCw size={16} /> {busy.__updates__ ? "Checking" : "Check updates"}
+        </button>
         <button type="button" onClick={() => setGithubOpen(true)}><Github size={16} /> Add GitHub skill</button>
         <button type="button" className="primary-button" onClick={() => setAddOpen(true)}><Plus size={16} /> Add source</button>
       </div>
     </div>
+
+    {driftReport && (
+      <div className={`drift-panel ${driftReport.ok ? "ok" : "bad"}`}>
+        <div className="drift-panel-head">
+          <strong>{driftReport.ok ? "Drift check passed" : `${driftReport.issues.length} drift issue${driftReport.issues.length === 1 ? "" : "s"}`}</strong>
+          <span>cache <code>{driftReport.cache_dir}</code></span>
+          <span>checked {relativeTime(driftReport.checked_at)}</span>
+        </div>
+        {driftReport.sources.length > 0 && (
+          <div className="drift-source-row">
+            {driftReport.sources.map((source) => (
+              <span key={source.source_id} className={source.cache_present ? "" : "bad"}>
+                {source.source_name}: {source.cache_present ? `${source.file_skill_count}/${source.db_skill_count}` : "cache missing"}
+              </span>
+            ))}
+          </div>
+        )}
+        {driftReport.issues.length > 0 && (
+          <div className="drift-issues">
+            {driftReport.issues.slice(0, 8).map((issue, index) => (
+              <div key={`${issue.code}-${issue.source_id || issue.skill_id || issue.agent_id || index}`} className="drift-issue">
+                <span className="badge badge-ignored">{issue.code}</span>
+                <span>{issue.message}</span>
+                {issue.path && <code>{issue.path}</code>}
+              </div>
+            ))}
+            {driftReport.issues.length > 8 && <p className="empty-state">{driftReport.issues.length - 8} more issues omitted.</p>}
+          </div>
+        )}
+      </div>
+    )}
 
     {sources.length === 0 ? (
       <div className="empty-state source-empty">
@@ -2146,8 +2606,8 @@ function MapPage() {
         <h3>{lifecycle.id}</h3>
         <p>{lifecycle.description}</p>
         <div className="map-flow">
-          {lifecycle.steps.map((step, index) => <React.Fragment key={`${lifecycle.id}:${step.agent}:${index}`}>
-            <span>{step.agent}{step.skip_when.length ? ` · skip: ${step.skip_when.join(", ")}` : ""}</span>
+          {lifecycle.steps.map((step, index) => <React.Fragment key={`${lifecycle.id}:${step.agent_id}:${index}`}>
+            <span>{step.agent_id}{step.skip_when.length ? ` · skip: ${step.skip_when.join(", ")}` : ""}{step.include_when.length ? ` · include: ${step.include_when.join(", ")}` : ""}</span>
             {index < lifecycle.steps.length - 1 && <em>-&gt;</em>}
           </React.Fragment>)}
         </div>

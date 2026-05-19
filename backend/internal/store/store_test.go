@@ -15,6 +15,26 @@ import (
 	"mini-paperclip/backend/internal/models"
 )
 
+type testLifecycleRouter struct {
+	next   string
+	exists bool
+}
+
+func (r testLifecycleRouter) NextAgent(context.Context, string, string, []string) (string, bool, error) {
+	if r.next == "" {
+		return "", true, nil
+	}
+	return r.next, false, nil
+}
+
+func (r testLifecycleRouter) Exists(context.Context, string) (bool, error) {
+	return r.exists, nil
+}
+
+func (r testLifecycleRouter) CLIKindForStep(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
 func TestListInstalledSkillsExcludesArchivedAndOrdersBySourceName(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -464,10 +484,10 @@ func TestClaimQueuedWakeupCreatesExactlyOneLinkedRun(t *testing.T) {
 		LIMIT 1`)).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "agent_id", "task_id", "source", "reason", "payload_json", "context_snapshot", "requester_type", "status", "coalesced_count", "error", "created_at", "updated_at"}).
 			AddRow("wake-1", "agent-1", "task-1", "manual", "manual_run", []byte(`{}`), []byte(`{}`), "api", "queued", 0, "", now, now))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT p.default_cli_kind
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT t.lifecycle_id, p.default_cli_kind AS cli_kind
 		FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`)).
 		WithArgs("task-1").
-		WillReturnRows(sqlmock.NewRows([]string{"default_cli_kind"}).AddRow("codex"))
+		WillReturnRows(sqlmock.NewRows([]string{"lifecycle_id", "cli_kind"}).AddRow("default", "codex"))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO runs (id, agent_id, task_id, wakeup_id, status, cli_kind, started_at)
 		VALUES ($1,$2,$3,$4,'running',$5,now())`)).
 		WithArgs(sqlmock.AnyArg(), "agent-1", "task-1", "wake-1", "codex").
@@ -582,6 +602,7 @@ func TestApplyAgentResponseUpdatesTagsLifecycleAndAdvancesWithNewRouting(t *test
 	mock.ExpectCommit()
 
 	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	store.SetLifecycleRouter(testLifecycleRouter{next: "frontend", exists: true})
 	tx, err := store.DB().BeginTxx(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)

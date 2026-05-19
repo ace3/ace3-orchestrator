@@ -199,9 +199,17 @@ func (s *Store) ClaimQueuedWakeup(ctx context.Context) (models.Run, bool, error)
 		}
 		return models.Run{}, false, mapNotFound(err)
 	}
-	var cliKind string
-	if err := tx.GetContext(ctx, &cliKind, `SELECT p.default_cli_kind
+	var route struct {
+		LifecycleID string `db:"lifecycle_id"`
+		CLIKind     string `db:"cli_kind"`
+	}
+	if err := tx.GetContext(ctx, &route, `SELECT t.lifecycle_id, p.default_cli_kind AS cli_kind
 		FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`, wakeup.TaskID); err != nil {
+		_ = tx.Rollback()
+		return models.Run{}, false, err
+	}
+	cliKind, err := s.lifecycleCLIKind(ctx, route.LifecycleID, wakeup.AgentID, route.CLIKind)
+	if err != nil {
 		_ = tx.Rollback()
 		return models.Run{}, false, err
 	}

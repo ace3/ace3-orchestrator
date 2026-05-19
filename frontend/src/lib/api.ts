@@ -51,6 +51,36 @@ export type SkillSource = {
   has_update: boolean;
 };
 
+export type SkillDriftIssue = {
+  code: string;
+  severity: string;
+  source_id?: string;
+  source_name?: string;
+  skill_id?: string;
+  skill_name?: string;
+  agent_id?: string;
+  path?: string;
+  message: string;
+};
+
+export type SourceDriftState = {
+  source_id: string;
+  source_name: string;
+  pinned_sha: string;
+  cache_path: string;
+  cache_present: boolean;
+  db_skill_count: number;
+  file_skill_count: number;
+};
+
+export type SkillDriftReport = {
+  ok: boolean;
+  checked_at: string;
+  cache_dir: string;
+  sources: SourceDriftState[];
+  issues: SkillDriftIssue[];
+};
+
 export type Project = {
   id: string;
   name: string;
@@ -76,6 +106,26 @@ export type Task = {
   checkout_run_id: string | null;
   execution_run_id: string | null;
   execution_state: string | null;
+};
+
+export type LifecycleStep = {
+  id: string;
+  lifecycle_id: string;
+  position: number;
+  agent_id: string;
+  cli_kind: "" | "claude" | "codex";
+  skip_when: string[];
+  include_when: string[];
+  model_id: string;
+};
+
+export type Lifecycle = {
+  id: string;
+  description: string;
+  is_default: boolean;
+  steps: LifecycleStep[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type TaskArtifact = {
@@ -203,7 +253,8 @@ export type OrchestratorMapAgent = {
 export type OrchestratorMapLifecycle = {
   id: string;
   description: string;
-  steps: Array<{ agent: string; skip_when: string[] }>;
+  is_default: boolean;
+  steps: LifecycleStep[];
 };
 
 export type OrchestratorMap = {
@@ -303,6 +354,8 @@ export const listInstalledSkills = (includeIgnored = false) => api<Skill[]>(`/sk
 export const getSkillTree = (id: string) => api<SkillTreeResponse>(`/skills/${id}/tree`);
 export const getSkillContent = (id: string, path = "SKILL.md") => api<SkillContentResponse>(`/skills/${id}/content?path=${encodeURIComponent(path)}`);
 export const listSkillSources = () => api<SkillSource[]>("/skill-sources");
+export const checkSkillDrift = () => api<SkillDriftReport>("/skill-drift");
+export const checkSkillSourceUpdates = () => api<SkillSource[]>("/skill-sources/check-updates", { method: "POST" });
 export const createSkillSource = (body: Partial<SkillSource>) => api<SkillSource>("/skill-sources", { method: "POST", body: JSON.stringify(body) });
 export const importGitHubSkill = (body: { url: string; name?: string }) => api<SkillSource>("/skill-sources/import-github-skill", { method: "POST", body: JSON.stringify(body) });
 export const syncSkillSource = (id: string) => api<SkillSource>(`/skill-sources/${id}/sync`, { method: "POST" });
@@ -310,3 +363,11 @@ export const pinSkillSource = (id: string, sha: string) => api<SkillSource>(`/sk
 export const deleteSkillSource = (id: string) => api<{ deleted: boolean }>(`/skill-sources/${id}`, { method: "DELETE" });
 export const updateSkill = (id: string, body: Partial<Skill>) => api<Skill>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const getOrchestratorMap = () => api<OrchestratorMap>("/orchestrator-map");
+export const listLifecycles = () => api<Lifecycle[]>("/lifecycles");
+export const getLifecycle = (id: string) => api<Lifecycle>(`/lifecycles/${id}`);
+export const createLifecycle = (body: unknown) => api<Lifecycle>("/lifecycles", { method: "POST", body: JSON.stringify(body) });
+export const updateLifecycle = (id: string, body: unknown) => api<Lifecycle>(`/lifecycles/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+export const deleteLifecycle = (id: string) => api<{ deleted: boolean }>(`/lifecycles/${id}`, { method: "DELETE" });
+export const getDefaultModel = () => api<{ value: string }>("/settings/default-model");
+export const setDefaultModel = (value: string) => api<{ value: string }>("/settings/default-model", { method: "PUT", body: JSON.stringify({ value }) });
+export const getLifecycleTagVocabulary = (id: string) => api<{ tags: string[] }>(`/lifecycles/${id}/tag-vocabulary`);

@@ -13,18 +13,20 @@ import (
 	"time"
 
 	"mini-paperclip/backend/internal/config"
+	"mini-paperclip/backend/internal/lifecycles"
 	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/repoconfig"
 	"mini-paperclip/backend/internal/store"
 )
 
 type Orchestrator struct {
-	cfg     config.Config
-	store   *store.Store
-	runners map[string]Runner
+	cfg        config.Config
+	store      *store.Store
+	lifecycles *lifecycles.Service
+	runners    map[string]Runner
 }
 
-func New(cfg config.Config, st *store.Store) *Orchestrator {
+func New(cfg config.Config, st *store.Store, lifecycleService *lifecycles.Service) *Orchestrator {
 	runners := map[string]Runner{
 		"claude": ClaudeRunner{},
 		"codex":  CodexRunner{},
@@ -34,9 +36,10 @@ func New(cfg config.Config, st *store.Store) *Orchestrator {
 		runners["codex"] = MockRunner{}
 	}
 	return &Orchestrator{
-		cfg:     cfg,
-		store:   st,
-		runners: runners,
+		cfg:        cfg,
+		store:      st,
+		lifecycles: lifecycleService,
+		runners:    runners,
 	}
 }
 
@@ -148,7 +151,12 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 			cleanup()
 		}
 	}()
-	prompt := BuildPromptWithControlPlane(agent, task, repo, comments, artifacts, skillDocs, control)
+	lifecyclePrompt, err := o.lifecyclePromptContext(ctx, task, agent.ID, run.CLIKind)
+	if err != nil {
+		o.failRun(ctx, run, "", fmt.Errorf("load lifecycle context: %w", err))
+		return
+	}
+	prompt := BuildPromptWithLifecycle(agent, task, repo, comments, artifacts, skillDocs, control, lifecyclePrompt)
 	var sessionID string
 	if control.RuntimeState != nil && control.RuntimeState.SessionID != nil {
 		sessionID = *control.RuntimeState.SessionID
@@ -159,6 +167,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		WorktreePath: worktree,
 		Profile:      deref(agent.CLIProfile),
 		SessionID:    sessionID,
+		Model:        lifecyclePrompt.CurrentModel,
 		Timeout:      o.cfg.CLITimeout,
 		MaxCostUSD:   o.cfg.RunMaxUSD,
 		OnEvent: func(level, msg string) {
@@ -190,6 +199,53 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 	o.store.Notify(ctx, "task", task.ID)
 	_ = o.store.UpdateRuntimeState(ctx, run, result.SessionID, runtimeStateJSON(result), "done")
 	_ = o.store.FinishRun(ctx, run.ID, "done", result.ExitCode, result.TokensIn, result.TokensOut, result.CostUSD, hashablePrompt(agent.RolePrompt, prompt), worktree)
+}
+
+func (o *Orchestrator) lifecyclePromptContext(ctx context.Context, task models.Task, agentID, fallbackCLIKind string) (LifecyclePromptContext, error) {
+	lifecycleID := task.LifecycleID
+	if lifecycleID == "" {
+		lifecycleID = repoconfig.DefaultLifecycleID
+	}
+	currentModel, err := o.lifecycles.ModelForStep(ctx, lifecycleID, agentID)
+	if err != nil {
+		return LifecyclePromptContext{}, err
+	}
+	currentCLIKind, err := o.lifecycles.CLIKindForStep(ctx, lifecycleID, agentID)
+	if err != nil {
+		return LifecyclePromptContext{}, err
+	}
+	if currentCLIKind == "" {
+		currentCLIKind = fallbackCLIKind
+	}
+	remaining, err := o.lifecycles.RemainingSteps(ctx, lifecycleID, agentID, []string(task.Tags))
+	if err != nil {
+		return LifecyclePromptContext{}, err
+	}
+	steps := make([]LifecyclePromptStep, 0, len(remaining))
+	for _, step := range remaining {
+		modelID := strings.TrimSpace(step.ModelID)
+		if modelID == "" {
+			modelID, err = o.lifecycles.ModelForStep(ctx, lifecycleID, step.AgentID)
+			if err != nil {
+				return LifecyclePromptContext{}, err
+			}
+		}
+		cliKind := strings.TrimSpace(step.CLIKind)
+		if cliKind == "" {
+			cliKind, err = o.lifecycles.CLIKindForStep(ctx, lifecycleID, step.AgentID)
+			if err != nil {
+				return LifecyclePromptContext{}, err
+			}
+		}
+		steps = append(steps, LifecyclePromptStep{AgentID: step.AgentID, CLIKind: cliKind, ModelID: modelID})
+	}
+	return LifecyclePromptContext{
+		ID:             lifecycleID,
+		CurrentAgent:   agentID,
+		CurrentCLIKind: currentCLIKind,
+		CurrentModel:   currentModel,
+		Remaining:      steps,
+	}, nil
 }
 
 func (o *Orchestrator) failRun(ctx context.Context, run models.Run, prompt string, err error) {

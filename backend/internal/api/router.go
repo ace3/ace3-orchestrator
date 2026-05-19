@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -12,16 +13,17 @@ import (
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/fsutil"
 	"mini-paperclip/backend/internal/httpx"
+	"mini-paperclip/backend/internal/lifecycles"
 	"mini-paperclip/backend/internal/orchestrator"
-	"mini-paperclip/backend/internal/repoconfig"
 	"mini-paperclip/backend/internal/store"
 )
 
 type API struct {
-	cfg       config.Config
-	store     *store.Store
-	bootstrap *bootstrap.Service
-	orch      *orchestrator.Orchestrator
+	cfg        config.Config
+	store      *store.Store
+	bootstrap  *bootstrap.Service
+	orch       *orchestrator.Orchestrator
+	lifecycles *lifecycles.Service
 }
 
 type debugHealthResponse struct {
@@ -29,8 +31,12 @@ type debugHealthResponse struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *orchestrator.Orchestrator) http.Handler {
-	api := &API{cfg: cfg, store: st, bootstrap: bs, orch: orch}
+func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *orchestrator.Orchestrator, lifecycleServices ...*lifecycles.Service) http.Handler {
+	var lifecycleService *lifecycles.Service
+	if len(lifecycleServices) > 0 {
+		lifecycleService = lifecycleServices[0]
+	}
+	api := &API{cfg: cfg, store: st, bootstrap: bs, orch: orch, lifecycles: lifecycleService}
 	r := chi.NewRouter()
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -87,7 +93,17 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Get("/skills/{id}/content", api.getSkillContent)
 		r.Patch("/skills/{id}", api.updateSkill)
 		r.Get("/skill-sources", api.listSkillSources)
+		r.Get("/skill-drift", api.skillDrift)
+		r.Get("/lifecycles", api.listLifecycles)
+		r.Post("/lifecycles", api.createLifecycle)
+		r.Get("/lifecycles/{id}", api.getLifecycle)
+		r.Patch("/lifecycles/{id}", api.updateLifecycle)
+		r.Delete("/lifecycles/{id}", api.deleteLifecycle)
+		r.Get("/lifecycles/{id}/tag-vocabulary", api.lifecycleTagVocabulary)
+		r.Get("/settings/default-model", api.getDefaultModel)
+		r.Put("/settings/default-model", api.setDefaultModel)
 		r.Post("/skill-sources", api.createSkillSource)
+		r.Post("/skill-sources/check-updates", api.checkSkillSourceUpdates)
 		r.Post("/skill-sources/import-github-skill", api.importGitHubSkillSource)
 		r.Post("/skill-sources/{id}/sync", api.syncSkillSource)
 		r.Post("/skill-sources/{id}/pin", api.pinSkillSource)
@@ -148,7 +164,7 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if lifecycleReferencesAgent(id) {
+	if a.lifecycleReferencesAgent(r.Context(), id) {
 		respond(w, nil, store.ErrConflict)
 		return
 	}
@@ -177,14 +193,17 @@ func (a *API) setAgentEnabled(w http.ResponseWriter, r *http.Request) {
 	respond(w, agent, err)
 }
 
-func lifecycleReferencesAgent(id string) bool {
-	cfg, err := repoconfig.Load()
+func (a *API) lifecycleReferencesAgent(ctx context.Context, id string) bool {
+	if a == nil || a.store == nil {
+		return true
+	}
+	lifecycles, err := a.store.ListLifecycles(ctx)
 	if err != nil {
 		return false
 	}
-	for _, lifecycle := range cfg.Lifecycles {
+	for _, lifecycle := range lifecycles {
 		for _, step := range lifecycle.Steps {
-			if step.Agent == id {
+			if step.AgentID == id {
 				return true
 			}
 		}
@@ -308,6 +327,20 @@ func (a *API) syncSkillSource(w http.ResponseWriter, r *http.Request) {
 	respond(w, source, err)
 }
 
+func (a *API) skillDrift(w http.ResponseWriter, r *http.Request) {
+	report, err := a.bootstrap.CheckSkillDrift(r.Context())
+	respond(w, report, err)
+}
+
+func (a *API) checkSkillSourceUpdates(w http.ResponseWriter, r *http.Request) {
+	if err := a.bootstrap.CheckUpdates(r.Context()); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	sources, err := a.store.ListSkillSources(r.Context())
+	respond(w, sources, err)
+}
+
 func (a *API) pinSkillSource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SHA string `json:"sha"`
@@ -347,6 +380,8 @@ func respond(w http.ResponseWriter, value any, err error) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "resource not found")
 	case errors.Is(err, store.ErrConflict):
 		httpx.Error(w, http.StatusConflict, "conflict", "operation conflicts with current state")
+	case errors.Is(err, store.ErrLifecycleIsDefault):
+		httpx.Error(w, http.StatusConflict, "lifecycle_is_default", "default lifecycles cannot be deleted")
 	case errors.Is(err, fsutil.ErrOutsideAllowlist):
 		httpx.Error(w, http.StatusBadRequest, "outside_allowlist", "path is outside MP_REPO_ALLOWLIST")
 	default:

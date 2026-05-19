@@ -17,15 +17,27 @@ import (
 
 var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("conflict")
+var ErrLifecycleIsDefault = errors.New("lifecycle is default")
 
 type Store struct {
-	db          *sqlx.DB
-	allowlist   []string
-	pathAliases []fsutil.PathAlias
+	db              *sqlx.DB
+	allowlist       []string
+	pathAliases     []fsutil.PathAlias
+	lifecycleRouter lifecycleRouter
 }
 
 func New(db *sqlx.DB, allowlist []string, pathAliases ...fsutil.PathAlias) *Store {
 	return &Store{db: db, allowlist: allowlist, pathAliases: pathAliases}
+}
+
+type lifecycleRouter interface {
+	NextAgent(ctx context.Context, lifecycleID, currentAgent string, taskTags []string) (next string, done bool, err error)
+	Exists(ctx context.Context, lifecycleID string) (bool, error)
+	CLIKindForStep(ctx context.Context, lifecycleID, agentID string) (string, error)
+}
+
+func (s *Store) SetLifecycleRouter(router lifecycleRouter) {
+	s.lifecycleRouter = router
 }
 
 func (s *Store) DB() *sqlx.DB {

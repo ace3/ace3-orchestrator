@@ -204,6 +204,23 @@ Artifact routes:
 
 Run-created artifacts have `run_id` set. They can be patched, but deletion returns `409 conflict`.
 
+## Skill Sources
+
+Skill content is read from the Git-backed cache under `MP_SKILLS_CACHE_DIR`; the database stores sources, pins, discovered metadata, ignored state, and agent assignments.
+
+- `GET /api/skill-sources`
+- `POST /api/skill-sources`
+- `POST /api/skill-sources/import-github-skill`
+- `POST /api/skill-sources/check-updates`
+- `POST /api/skill-sources/{source_id}/sync`
+- `POST /api/skill-sources/{source_id}/pin`
+- `DELETE /api/skill-sources/{source_id}`
+- `GET /api/skills?include_ignored=true`
+- `PATCH /api/skills/{skill_id}`
+- `GET /api/skill-drift`
+
+`POST /api/skill-sources/{source_id}/sync` fetches the pinned Git ref only when the cached checkout is missing, discovers `SKILL.md` files, and refreshes DB metadata. `GET /api/skill-drift` reports cache/DB/repo-default mismatches and returns `ok: false` when an operator sync or pin action is needed.
+
 ## Agent Output Attachments
 
 Agents can persist artifacts from their run JSON:

@@ -62,6 +62,9 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 	if err := s.upsertMissingSkillsFromConfig(ctx, cfg); err != nil {
 		return status, err
 	}
+	if err := s.EnsureLifecycles(ctx); err != nil {
+		return status, err
+	}
 	skillsByName, err := s.skillsByName(ctx)
 	if err != nil {
 		return status, err
@@ -70,6 +73,40 @@ func (s *Service) Run(ctx context.Context) (Status, error) {
 		return status, err
 	}
 	return s.Status(ctx)
+}
+
+func (s *Service) EnsureLifecycles(ctx context.Context) error {
+	cfg, err := repoconfig.Load()
+	if err != nil {
+		return err
+	}
+	count, err := s.store.CountLifecycles(ctx)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	for _, lifecycle := range cfg.Lifecycles {
+		steps := make([]store.LifecycleStepInput, 0, len(lifecycle.Steps))
+		for _, step := range lifecycle.Steps {
+			steps = append(steps, store.LifecycleStepInput{
+				AgentID:  step.Agent,
+				CLIKind:  "",
+				SkipWhen: step.SkipWhen,
+				ModelID:  "",
+			})
+		}
+		if err := s.store.UpsertDefaultLifecycle(ctx, store.LifecycleInput{
+			ID:          lifecycle.ID,
+			Description: lifecycle.Description,
+			IsDefault:   true,
+			Steps:       steps,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) upsertSkillSourcesFromConfig(ctx context.Context, cfg *repoconfig.Config) error {
@@ -203,7 +240,7 @@ func (s *Service) SyncSource(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	target := filepath.Join(s.skillsCacheDir, source.Name, source.PinnedSHA)
+	target := s.sourceCachePath(source)
 	if _, err := os.Stat(filepath.Join(target, ".git")); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err

@@ -269,6 +269,13 @@ func TestOrchestratorMapRoute(t *testing.T) {
 		WithArgs("custom-backend").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "source_id", "name", "path_in_source", "version", "archived", "created_at", "updated_at"}).
 			AddRow("skill-1", "source-1", "backend-developer", "skills/backend-developer/SKILL.md", "", false, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM lifecycles ORDER BY is_default DESC, id")).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "description", "is_default", "created_at", "updated_at"}).
+			AddRow("default", "Full flow", true, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM lifecycle_steps WHERE lifecycle_id=$1 ORDER BY position")).
+		WithArgs("default").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "lifecycle_id", "position", "agent_id", "cli_kind", "skip_when", "include_when", "model_id", "created_at", "updated_at"}).
+			AddRow("step-1", "default", 0, "pm", "", "{}", "{}", "", now, now))
 
 	handler := NewRouter(config.Config{APIToken: "test-token"}, store.New(sqlx.NewDb(rawDB, "sqlmock"), nil), nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/orchestrator-map", nil)

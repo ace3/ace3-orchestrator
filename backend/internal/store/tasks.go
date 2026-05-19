@@ -15,7 +15,6 @@ import (
 	"github.com/lib/pq"
 
 	"mini-paperclip/backend/internal/models"
-	"mini-paperclip/backend/internal/repoconfig"
 )
 
 type TaskInput struct {
@@ -93,6 +92,9 @@ func (s *Store) CreateTask(ctx context.Context, projectID string, in TaskInput) 
 	if in.LifecycleID != nil && strings.TrimSpace(*in.LifecycleID) != "" {
 		lifecycleID = strings.TrimSpace(*in.LifecycleID)
 	}
+	if err := s.validateLifecycleID(ctx, lifecycleID); err != nil {
+		return models.Task{}, err
+	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO tasks (id, project_id, repo_id, title, description, status, assignee_agent_id, parent_id, priority, tags, lifecycle_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, projectID, in.RepoID, strings.TrimSpace(in.Title), in.Description, status, assignee, in.ParentID, in.Priority, tags, lifecycleID); err != nil {
 		return models.Task{}, err
@@ -135,6 +137,9 @@ func (s *Store) UpdateTask(ctx context.Context, id string, in TaskInput) (models
 	}
 	if in.LifecycleID != nil && strings.TrimSpace(*in.LifecycleID) != "" {
 		task.LifecycleID = strings.TrimSpace(*in.LifecycleID)
+		if err := s.validateLifecycleID(ctx, task.LifecycleID); err != nil {
+			return task, err
+		}
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET repo_id=$2, title=$3, description=$4, status=$5, assignee_agent_id=$6, parent_id=$7, priority=$8, tags=$9, lifecycle_id=$10, updated_at=now() WHERE id=$1`,
 		id, task.RepoID, task.Title, task.Description, task.Status, task.AssigneeAgentID, task.ParentID, task.Priority, task.Tags, task.LifecycleID); err != nil {
@@ -310,12 +315,13 @@ func (s *Store) EnqueueTaskRun(ctx context.Context, taskID string) (models.Run, 
 
 func (s *Store) DispatchQueuedRuns(ctx context.Context, limit int) (int, error) {
 	type candidate struct {
-		AgentID string `db:"agent_id"`
-		TaskID  string `db:"task_id"`
-		CLIKind string `db:"cli_kind"`
+		AgentID     string `db:"agent_id"`
+		TaskID      string `db:"task_id"`
+		LifecycleID string `db:"lifecycle_id"`
+		CLIKind     string `db:"cli_kind"`
 	}
 	var candidates []candidate
-	if err := s.db.SelectContext(ctx, &candidates, `SELECT a.id AS agent_id, t.id AS task_id, p.default_cli_kind AS cli_kind
+	if err := s.db.SelectContext(ctx, &candidates, `SELECT a.id AS agent_id, t.id AS task_id, t.lifecycle_id, p.default_cli_kind AS cli_kind
 		FROM agents a
 		JOIN tasks t ON t.assignee_agent_id = a.id
 		JOIN projects p ON p.id = t.project_id
@@ -332,9 +338,13 @@ func (s *Store) DispatchQueuedRuns(ctx context.Context, limit int) (int, error) 
 	}
 	count := 0
 	for _, candidate := range candidates {
+		cliKind, err := s.lifecycleCLIKind(ctx, candidate.LifecycleID, candidate.AgentID, candidate.CLIKind)
+		if err != nil {
+			return count, err
+		}
 		id := uuid.NewString()
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO runs (id, agent_id, task_id, status, cli_kind)
-			VALUES ($1,$2,$3,'queued',$4) ON CONFLICT DO NOTHING`, id, candidate.AgentID, candidate.TaskID, candidate.CLIKind); err != nil {
+			VALUES ($1,$2,$3,'queued',$4) ON CONFLICT DO NOTHING`, id, candidate.AgentID, candidate.TaskID, cliKind); err != nil {
 			return count, err
 		}
 		count++
@@ -344,13 +354,31 @@ func (s *Store) DispatchQueuedRuns(ctx context.Context, limit int) (int, error) 
 }
 
 func (s *Store) RunCLIKind(ctx context.Context, taskID string) (string, error) {
-	var cliKind string
-	err := s.db.GetContext(ctx, &cliKind, `SELECT p.default_cli_kind
+	var row struct {
+		AgentID     string `db:"agent_id"`
+		LifecycleID string `db:"lifecycle_id"`
+		CLIKind     string `db:"cli_kind"`
+	}
+	err := s.db.GetContext(ctx, &row, `SELECT COALESCE(t.assignee_agent_id, '') AS agent_id, t.lifecycle_id, p.default_cli_kind AS cli_kind
 		FROM tasks t
 		JOIN projects p ON p.id=t.project_id
 		WHERE t.id=$1`, taskID)
 	if err != nil {
 		return "", mapNotFound(err)
+	}
+	return s.lifecycleCLIKind(ctx, row.LifecycleID, row.AgentID, row.CLIKind)
+}
+
+func (s *Store) lifecycleCLIKind(ctx context.Context, lifecycleID, agentID, fallback string) (string, error) {
+	if s.lifecycleRouter == nil || strings.TrimSpace(agentID) == "" {
+		return fallback, nil
+	}
+	cliKind, err := s.lifecycleRouter.CLIKindForStep(ctx, lifecycleID, agentID)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(cliKind) == "" {
+		return fallback, nil
 	}
 	return cliKind, nil
 }
@@ -507,7 +535,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	nextLifecycleID := task.LifecycleID
 	if update.LifecycleID != nil && strings.TrimSpace(*update.LifecycleID) != "" && !strings.EqualFold(strings.TrimSpace(*update.LifecycleID), "null") {
 		nextLifecycleID = strings.TrimSpace(*update.LifecycleID)
-		if err := validateLifecycleID(nextLifecycleID); err != nil {
+		if err := s.validateLifecycleID(ctx, nextLifecycleID); err != nil {
 			return err
 		}
 	}
@@ -532,7 +560,7 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 			status = "todo"
 		}
 	} else if !update.RequestHumanReview && status == "done" {
-		next, err := advanceLifecycleTx(ctx, tx, nextTask)
+		next, err := s.advanceLifecycleTx(ctx, tx, nextTask)
 		if err != nil {
 			return err
 		}
@@ -712,10 +740,9 @@ func baseTaskTitle(title string) string {
 // or nil if the lifecycle is exhausted. Uses the task's current assignee as the
 // "where we are now" cursor; lifecycle steps are skipped per the task's tags.
 // Returns (nil, nil) if no further step applies — caller leaves the task done.
-func advanceLifecycleTx(ctx context.Context, tx *sqlx.Tx, task models.Task) (*string, error) {
-	cfg, err := repoconfig.Load()
-	if err != nil {
-		return nil, err
+func (s *Store) advanceLifecycleTx(ctx context.Context, tx *sqlx.Tx, task models.Task) (*string, error) {
+	if s.lifecycleRouter == nil {
+		return nil, errors.New("lifecycle router is not configured")
 	}
 	current := ""
 	if task.AssigneeAgentID != nil {
@@ -723,7 +750,7 @@ func advanceLifecycleTx(ctx context.Context, tx *sqlx.Tx, task models.Task) (*st
 		// (SyncRepoAgent preserves it), so it's safe to use directly.
 		current = *task.AssigneeAgentID
 	}
-	nextID, done, err := cfg.NextAgent(task.LifecycleID, current, []string(task.Tags))
+	nextID, done, err := s.lifecycleRouter.NextAgent(ctx, task.LifecycleID, current, []string(task.Tags))
 	if err != nil {
 		return nil, err
 	}
@@ -942,12 +969,15 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
-func validateLifecycleID(id string) error {
-	cfg, err := repoconfig.Load()
+func (s *Store) validateLifecycleID(ctx context.Context, id string) error {
+	if s.lifecycleRouter == nil {
+		return nil
+	}
+	ok, err := s.lifecycleRouter.Exists(ctx, id)
 	if err != nil {
 		return err
 	}
-	if _, ok := cfg.LifecycleByID(id); !ok {
+	if !ok {
 		return fmt.Errorf("unknown lifecycle %q", id)
 	}
 	return nil

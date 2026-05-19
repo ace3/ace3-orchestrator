@@ -88,6 +88,28 @@ type Task struct {
 	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
 }
 
+type Lifecycle struct {
+	ID          string          `db:"id" json:"id"`
+	Description string          `db:"description" json:"description"`
+	IsDefault   bool            `db:"is_default" json:"is_default"`
+	Steps       []LifecycleStep `json:"steps,omitempty"`
+	CreatedAt   time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time       `db:"updated_at" json:"updated_at"`
+}
+
+type LifecycleStep struct {
+	ID          string         `db:"id" json:"id"`
+	LifecycleID string         `db:"lifecycle_id" json:"lifecycle_id"`
+	Position    int            `db:"position" json:"position"`
+	AgentID     string         `db:"agent_id" json:"agent_id"`
+	CLIKind     string         `db:"cli_kind" json:"cli_kind"`
+	SkipWhen    pq.StringArray `db:"skip_when" json:"skip_when"`
+	IncludeWhen pq.StringArray `db:"include_when" json:"include_when"`
+	ModelID     string         `db:"model_id" json:"model_id"`
+	CreatedAt   time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`
+}
+
 type TaskArtifact struct {
 	ID        string          `db:"id" json:"id"`
 	TaskID    string          `db:"task_id" json:"task_id"`

@@ -12,6 +12,7 @@ import (
 	"mini-paperclip/backend/internal/bootstrap"
 	"mini-paperclip/backend/internal/config"
 	"mini-paperclip/backend/internal/db"
+	"mini-paperclip/backend/internal/lifecycles"
 	"mini-paperclip/backend/internal/orchestrator"
 	"mini-paperclip/backend/internal/store"
 )
@@ -29,6 +30,8 @@ func main() {
 		os.Exit(1)
 	}
 	st := store.New(conn, cfg.RepoAllowlist, cfg.RepoPathAliases...)
+	lifecycleService := lifecycles.New(st)
+	st.SetLifecycleRouter(lifecycleService)
 	bs := bootstrap.New(st, cfg.SkillsCacheDir)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -42,11 +45,15 @@ func main() {
 			slog.Error("sync repo-defined agents failed", "error", err)
 			os.Exit(1)
 		}
+		if err := bs.EnsureLifecycles(ctx); err != nil {
+			slog.Error("seed lifecycles failed", "error", err)
+			os.Exit(1)
+		}
 	}
-	orch := orchestrator.New(cfg, st)
+	orch := orchestrator.New(cfg, st, lifecycleService)
 	bs.StartUpdatePoller(ctx)
 	orch.Start(ctx)
-	handler := api.NewRouter(cfg, st, bs, orch)
+	handler := api.NewRouter(cfg, st, bs, orch, lifecycleService)
 	slog.Info("mini-paperclip backend listening", "port", cfg.Port, "workers", cfg.Workers)
 	if err := http.ListenAndServe(":"+cfg.Port, handler); err != nil {
 		slog.Error("http server failed", "error", err)

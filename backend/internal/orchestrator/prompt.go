@@ -17,6 +17,20 @@ type SkillDoc struct {
 	Content string
 }
 
+type LifecyclePromptStep struct {
+	AgentID string
+	CLIKind string
+	ModelID string
+}
+
+type LifecyclePromptContext struct {
+	ID             string
+	CurrentAgent   string
+	CurrentCLIKind string
+	CurrentModel   string
+	Remaining      []LifecyclePromptStep
+}
+
 func BuildPrompt(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact) string {
 	return BuildPromptWithSkillDocs(agent, task, repo, comments, artifacts, nil)
 }
@@ -26,6 +40,10 @@ func BuildPromptWithSkillDocs(agent models.Agent, task models.Task, repo *models
 }
 
 func BuildPromptWithControlPlane(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact, skillDocs []SkillDoc, control store.RunContext) string {
+	return BuildPromptWithLifecycle(agent, task, repo, comments, artifacts, skillDocs, control, LifecyclePromptContext{})
+}
+
+func BuildPromptWithLifecycle(agent models.Agent, task models.Task, repo *models.Repo, comments []models.Comment, artifacts []models.TaskArtifact, skillDocs []SkillDoc, control store.RunContext, lifecycle LifecyclePromptContext) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== AGENT ===\nID: %s\nName: %s\nRole: %s\n\n", agent.ID, agent.Name, agent.Role)
 	fmt.Fprintf(&b, "=== ACTIVE SKILLS ===\n")
@@ -50,7 +68,7 @@ func BuildPromptWithControlPlane(agent models.Agent, task models.Task, repo *mod
 	if len(task.Tags) > 0 {
 		fmt.Fprintf(&b, "Tags: %s\n", strings.Join([]string(task.Tags), ", "))
 	}
-	writeLifecycleSection(&b, task, agent.ID)
+	writeLifecycleSection(&b, task, agent.ID, lifecycle)
 	if repo != nil {
 		fmt.Fprintf(&b, "\n=== WORKING REPO ===\n%s\nDefault branch: %s\n", repo.LocalPath, repo.DefaultBranch)
 	}
@@ -196,23 +214,40 @@ func writeSkillDocs(b *strings.Builder, skillDocs []SkillDoc) {
 	}
 }
 
-func writeLifecycleSection(b *strings.Builder, task models.Task, currentAgent string) {
-	cfg, err := repoconfig.Load()
-	if err != nil {
-		return
-	}
+func writeLifecycleSection(b *strings.Builder, task models.Task, currentAgent string, lifecycle LifecyclePromptContext) {
 	lifecycleID := task.LifecycleID
 	if lifecycleID == "" {
 		lifecycleID = repoconfig.DefaultLifecycleID
 	}
-	remaining := cfg.RemainingSteps(lifecycleID, currentAgent, []string(task.Tags))
+	if lifecycle.ID != "" {
+		lifecycleID = lifecycle.ID
+	}
+	if lifecycle.CurrentAgent != "" {
+		currentAgent = lifecycle.CurrentAgent
+	}
 	fmt.Fprintf(b, "\n=== LIFECYCLE ===\nID: %s\nCurrent agent: %s\n", lifecycleID, currentAgent)
-	if len(remaining) == 0 {
+	if lifecycle.CurrentModel != "" {
+		fmt.Fprintf(b, "Assigned runner: %s\nAssigned model: %s\n", lifecycle.CurrentCLIKind, lifecycle.CurrentModel)
+	}
+	if len(lifecycle.Remaining) == 0 {
 		b.WriteString("Planned remaining steps: (none — this is the final step)\n")
 		return
 	}
 	b.WriteString("Planned remaining steps (after you finish):\n")
-	for i, step := range remaining {
-		fmt.Fprintf(b, "  %d. %s\n", i+1, step.Agent)
+	for i, step := range lifecycle.Remaining {
+		if step.ModelID == "" && step.CLIKind == "" {
+			fmt.Fprintf(b, "  %d. %s\n", i+1, step.AgentID)
+			continue
+		}
+		fmt.Fprintf(b, "  %d. %s", i+1, step.AgentID)
+		if step.CLIKind != "" {
+			fmt.Fprintf(b, " (runner: %s", step.CLIKind)
+			if step.ModelID != "" {
+				fmt.Fprintf(b, ", model: %s", step.ModelID)
+			}
+			b.WriteString(")\n")
+			continue
+		}
+		fmt.Fprintf(b, " (model: %s)\n", step.ModelID)
 	}
 }

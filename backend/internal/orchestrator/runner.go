@@ -26,6 +26,7 @@ type RunRequest struct {
 	WorktreePath string
 	Profile      string
 	SessionID    string
+	Model        string
 	Timeout      time.Duration
 	MaxCostUSD   float64
 	OnEvent      func(level, msg string)
@@ -47,6 +48,9 @@ func (ClaudeRunner) Kind() string { return "claude" }
 
 func (ClaudeRunner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	args := []string{"--print", "--dangerously-skip-permissions", "--output-format", "stream-json", "--append-system-prompt", req.SystemPrompt}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
 	if req.SessionID != "" {
 		args = append(args, "--resume", req.SessionID)
 	}
@@ -85,10 +89,17 @@ func (CodexRunner) Kind() string { return "codex" }
 
 func (CodexRunner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	if req.SessionID != "" {
-		args := []string{"exec", "resume", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", req.SessionID, "System instructions:\n" + req.SystemPrompt + "\n\nTask prompt:\n" + req.Prompt}
+		args := []string{"exec", "resume", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"}
+		if req.Model != "" {
+			args = append(args, "--model", req.Model)
+		}
+		args = append(args, req.SessionID, "System instructions:\n"+req.SystemPrompt+"\n\nTask prompt:\n"+req.Prompt)
 		return runCommand(ctx, "codex", args, req)
 	}
 	args := []string{"exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox"}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
 	if req.WorktreePath != "" {
 		args = append(args, "--cd", req.WorktreePath)
 	}

@@ -56,3 +56,36 @@ func TestSkillIgnoreImportMigrationAddsSelectionColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestLifecyclesMigrationAddsControlPlaneTables(t *testing.T) {
+	body, err := migrationFiles.ReadFile("migrations/0007_lifecycles.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	required := []string{
+		"CREATE TABLE IF NOT EXISTS lifecycles",
+		"CREATE TABLE IF NOT EXISTS lifecycle_steps",
+		"cli_kind     TEXT NOT NULL DEFAULT ''",
+		"include_when TEXT[] NOT NULL DEFAULT '{}'",
+		"model_id     TEXT NOT NULL DEFAULT ''",
+		"CREATE TABLE IF NOT EXISTS app_settings",
+		"('default_model', 'claude-sonnet-4-6')",
+	}
+	for _, item := range required {
+		if !strings.Contains(sql, item) {
+			t.Fatalf("lifecycle migration missing %q", item)
+		}
+	}
+}
+
+func TestLifecycleStepCLIKindMigrationBackfillsExistingDatabases(t *testing.T) {
+	body, err := migrationFiles.ReadFile("migrations/0008_lifecycle_step_cli_kind.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	if !strings.Contains(sql, "ADD COLUMN IF NOT EXISTS cli_kind TEXT NOT NULL DEFAULT ''") {
+		t.Fatalf("cli_kind migration missing backfill column")
+	}
+}

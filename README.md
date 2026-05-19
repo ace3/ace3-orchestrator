@@ -92,6 +92,17 @@ Docker uses named volumes:
 
 `docker compose down` preserves those volumes. `docker compose down -v` removes them and is destructive.
 
+Skill content is Git/file-cache owned. The database stores skill sources, pinned refs, discovered skill metadata, ignored state, and agent assignments; it does not store full skill bundles. Hosted deployments must keep `MP_SKILLS_CACHE_DIR` on persistent storage, such as the `mini-paperclip_mp_skills_cache` volume above. App restart does not delete the cache, but replacing a container without a persistent cache volume will require an admin sync to fetch pinned skill files again.
+
+Normal hosted skill operations should use the authenticated Admin UI/API. Make targets are local/server wrappers over the same API behavior:
+
+```sh
+BASE_URL=http://127.0.0.1:18081 API_TOKEN=dev-token make skills-sync
+BASE_URL=http://127.0.0.1:18081 API_TOKEN=dev-token make skills-check
+BASE_URL=http://127.0.0.1:18081 API_TOKEN=dev-token make skills-update-check
+BASE_URL=http://127.0.0.1:18081 API_TOKEN=dev-token SOURCE=ace3 SHA=<commit-sha> make skills-pin
+```
+
 ## REST API
 
 See `docs/rest-api.md` for task, artifact, run, heartbeat, and error contracts. Task artifacts are the durable context channel for PM documents, handoffs, engineering plans, QA reports, implementation notes, and run logs.

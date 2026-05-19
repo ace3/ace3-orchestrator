@@ -1,4 +1,4 @@
-.PHONY: fmt backend-test frontend-build audit test e2e-one-task local-env local-cli-env local-db-up local-db-check local-db-down local-db-ps local-db-logs local-backend local-backend-cli local-frontend local-dev local-dev-cli docker-up docker-down docker-ps docker-logs
+.PHONY: fmt backend-test frontend-build audit test e2e-one-task skills-sync skills-check skills-update-check skills-pin local-env local-cli-env local-db-up local-db-check local-db-down local-db-ps local-db-logs local-backend local-backend-cli local-frontend local-dev local-dev-cli docker-up docker-down docker-ps docker-logs
 
 fmt:
 	cd backend && gofmt -w $$(find . -name '*.go')
@@ -16,6 +16,18 @@ test: fmt backend-test frontend-build audit
 
 e2e-one-task:
 	./scripts/e2e-one-task.sh
+
+skills-sync:
+	node scripts/skills-api.mjs sync
+
+skills-check:
+	node scripts/skills-api.mjs check
+
+skills-update-check:
+	node scripts/skills-api.mjs update-check
+
+skills-pin:
+	node scripts/skills-api.mjs pin
 
 local-env:
 	cp -n deploy/.env.local.example deploy/.env.local || true
