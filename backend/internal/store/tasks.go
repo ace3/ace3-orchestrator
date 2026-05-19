@@ -525,6 +525,13 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		status = "in_review"
 		update.Comment = "[HUMAN REVIEW REQUESTED] " + update.Comment
 	}
+	humanInteractions, err := normalizeHumanInteractions(response.HumanInteractions, agent.ID, runID)
+	if err != nil {
+		return err
+	}
+	if len(humanInteractions) > 0 {
+		status = "waiting"
+	}
 	if err := validateTaskStatus(status); err != nil {
 		return err
 	}
@@ -546,11 +553,19 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)", uuid.NewString(), task.ID, "agent:"+agent.ID, update.Comment); err != nil {
+	commentID := uuid.NewString()
+	if _, err := tx.ExecContext(ctx, "INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)", commentID, task.ID, "agent:"+agent.ID, update.Comment); err != nil {
 		return err
 	}
 	var assignee *string = task.AssigneeAgentID
-	if !emptyAgentRef(update.ReassignTo) {
+	if len(humanInteractions) > 0 {
+		if err := s.createHumanInteractions(ctx, tx, task.ID, commentID, humanInteractions); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,'system',$3)", uuid.NewString(), task.ID, waitingAuditComment(humanInteractions)); err != nil {
+			return err
+		}
+	} else if !emptyAgentRef(update.ReassignTo) {
 		resolved, err := resolveAgentRefTx(ctx, tx, update.ReassignTo)
 		if err != nil {
 			return err
@@ -612,6 +627,57 @@ func (s *Store) ApplyAgentResponse(ctx context.Context, tx *sqlx.Tx, task models
 		}
 	}
 	return nil
+}
+
+func normalizeHumanInteractions(items []HumanInteraction, agentID string, runID *string) ([]InteractionInput, error) {
+	out := make([]InteractionInput, 0, len(items))
+	for _, item := range items {
+		kind := strings.TrimSpace(item.Kind)
+		switch kind {
+		case "ask_user_questions", "request_confirmation", "approval_request":
+		default:
+			return nil, fmt.Errorf("unsupported human interaction kind %q", kind)
+		}
+		title := strings.TrimSpace(item.Title)
+		if title == "" {
+			title = kind
+		}
+		policy := strings.TrimSpace(item.ContinuationPolicy)
+		if policy == "" {
+			policy = "wake_assignee"
+		}
+		out = append(out, InteractionInput{
+			Kind:               kind,
+			Status:             "open",
+			Title:              title,
+			Summary:            strings.TrimSpace(item.Summary),
+			Payload:            item.Payload,
+			ContinuationPolicy: policy,
+			IdempotencyKey:     item.IdempotencyKey,
+			SourceRunID:        runID,
+			CreatedBy:          "agent:" + agentID,
+		})
+	}
+	return out, nil
+}
+
+func (s *Store) createHumanInteractions(ctx context.Context, tx *sqlx.Tx, taskID, sourceCommentID string, interactions []InteractionInput) error {
+	for _, interaction := range interactions {
+		commentID := sourceCommentID
+		interaction.SourceCommentID = &commentID
+		if _, err := s.createInteraction(ctx, tx, taskID, interaction, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func waitingAuditComment(interactions []InteractionInput) string {
+	titles := make([]string, 0, len(interactions))
+	for _, interaction := range interactions {
+		titles = append(titles, interaction.Title)
+	}
+	return "Waiting on human interaction: " + strings.Join(titles, "; ")
 }
 
 type taskTreeStats struct {
@@ -815,7 +881,8 @@ func resolveAgentRefQuery(ctx context.Context, q agentResolver, value string) (s
 }
 
 type AgentResponse struct {
-	TaskUpdates TaskUpdates `json:"task_updates"`
+	TaskUpdates       TaskUpdates        `json:"task_updates"`
+	HumanInteractions []HumanInteraction `json:"human_interactions"`
 }
 
 type TaskUpdates struct {
@@ -845,6 +912,15 @@ type Attachment struct {
 	Path     string          `json:"path"`
 	Note     string          `json:"note"`
 	Metadata json.RawMessage `json:"metadata"`
+}
+
+type HumanInteraction struct {
+	Kind               string          `json:"kind"`
+	Title              string          `json:"title"`
+	Summary            string          `json:"summary"`
+	Payload            json.RawMessage `json:"payload"`
+	ContinuationPolicy string          `json:"continuation_policy"`
+	IdempotencyKey     *string         `json:"idempotency_key"`
 }
 
 func attachmentArtifactInput(attachment Attachment, agentID string, runID *string) (TaskArtifactInput, bool, error) {
@@ -948,7 +1024,7 @@ func normalizeMetadata(metadata json.RawMessage) (json.RawMessage, error) {
 
 func validateTaskStatus(status string) error {
 	switch status {
-	case "todo", "in_progress", "in_review", "blocked", "done", "cancelled":
+	case "todo", "in_progress", "in_review", "waiting", "blocked", "done", "cancelled":
 		return nil
 	default:
 		return errors.New("invalid task status")

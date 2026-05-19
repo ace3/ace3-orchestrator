@@ -496,7 +496,7 @@ func TestClaimQueuedWakeupCreatesExactlyOneLinkedRun(t *testing.T) {
 		WithArgs("wake-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE tasks
-		SET status=CASE WHEN status IN ('todo','blocked') THEN 'in_progress' ELSE status END,
+		SET status=CASE WHEN status IN ('todo','waiting','blocked') THEN 'in_progress' ELSE status END,
 		    checkout_run_id=$2,
 		    execution_run_id=$2,
 		    execution_state='running',
@@ -724,4 +724,128 @@ func TestApplyAgentResponseReassignDoneKeepsTaskRunnable(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestApplyAgentResponseCreatesHumanInteractionAndWaits(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	pmID := "pm"
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)")).
+		WithArgs(sqlmock.AnyArg(), "task-1", "agent:pm", "Need product input").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO task_interactions (id, task_id, kind, status, title, summary, payload, continuation_policy, idempotency_key, source_comment_id, source_run_id, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`)).
+		WithArgs(sqlmock.AnyArg(), "task-1", "ask_user_questions", "open", "Clarify scope", "Need user input.", []byte(`{"question":"Which path?"}`), "wake_assignee", nil, sqlmock.AnyArg(), nil, "agent:pm").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_interactions WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(interactionRows(now).AddRow("interaction-1", "task-1", "ask_user_questions", "open", "Clarify scope", "Need user input.", []byte(`{"question":"Which path?"}`), []byte(`{}`), "wake_assignee", nil, nil, nil, "agent:pm", nil, nil, now, now))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,'system',$3)")).
+		WithArgs(sqlmock.AnyArg(), "task-1", "Waiting on human interaction: Clarify scope").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tasks SET status=$2, assignee_agent_id=$3, retry_count=0, tags=$4, lifecycle_id=$5, updated_at=now() WHERE id=$1")).
+		WithArgs("task-1", "waiting", sqlmock.AnyArg(), sqlmock.AnyArg(), "default").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	tx, err := store.DB().BeginTxx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.ApplyAgentResponse(context.Background(), tx, models.Task{ID: "task-1", ProjectID: "project-1", AssigneeAgentID: &pmID, LifecycleID: "default"}, models.Agent{ID: "pm"}, AgentResponse{
+		TaskUpdates: TaskUpdates{Status: "in_progress", Comment: "Need product input"},
+		HumanInteractions: []HumanInteraction{{
+			Kind:    "ask_user_questions",
+			Title:   "Clarify scope",
+			Summary: "Need user input.",
+			Payload: []byte(`{"question":"Which path?"}`),
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveQuestionInteractionRecordsAnswerAndQueuesWakeup(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_interactions WHERE id=$1")).
+		WithArgs("interaction-1").
+		WillReturnRows(interactionRows(now).AddRow("interaction-1", "task-1", "ask_user_questions", "open", "Clarify scope", "Need input.", []byte(`{"question":"Which path?"}`), []byte(`{}`), "wake_assignee", nil, nil, nil, "agent:pm", nil, nil, now, now))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE task_interactions
+		SET status=$2, resolution_payload=$3, resolved_by=$4, resolved_at=now(), updated_at=now()
+		WHERE id=$1 AND status='open'`)).
+		WithArgs("interaction-1", "resolved", []byte(`{"note":"","response":"Use option A.","status":"resolved"}`), "human:ignas").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)")).
+		WithArgs(sqlmock.AnyArg(), "task-1", "human:ignas", `Answered "Clarify scope": Use option A.`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs("task-1").
+		WillReturnRows(taskRows(now).AddRow("task-1", "project-1", nil, "Do work", "", "waiting", "pm", nil, 0, 0, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM agent_wakeups
+			WHERE agent_id=$1 AND task_id=$2 AND source=$3 AND reason=$4 AND payload_json=$5::jsonb AND status IN ('queued','claimed','running')
+			ORDER BY created_at DESC LIMIT 1`)).
+		WithArgs("pm", "task-1", "interaction", "interaction_resolved", sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO agent_wakeups (id, agent_id, task_id, source, reason, payload_json, context_snapshot, idempotency_key, requester_type, requester_id, status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'queued')`)).
+		WithArgs(sqlmock.AnyArg(), "pm", "task-1", "interaction", "interaction_resolved", sqlmock.AnyArg(), sqlmock.AnyArg(), nil, "interaction", "interaction-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM agent_wakeups WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(wakeupRows(now).AddRow("wakeup-1", "pm", "task-1", "interaction", "interaction_resolved", []byte(`{}`), []byte(`{}`), nil, "interaction", "interaction-1", "queued", 0, nil, nil, nil, "", now, now))
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_interactions WHERE id=$1")).
+		WithArgs("interaction-1").
+		WillReturnRows(interactionRows(now).AddRow("interaction-1", "task-1", "ask_user_questions", "resolved", "Clarify scope", "Need input.", []byte(`{"question":"Which path?"}`), []byte(`{"note":"","response":"Use option A.","status":"resolved"}`), "wake_assignee", nil, nil, nil, "agent:pm", "human:ignas", now, now, now))
+
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	interaction, err := store.ResolveInteraction(context.Background(), "interaction-1", "resolved", "human:ignas", InteractionResolutionInput{Response: "Use option A."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interaction.Status != "resolved" {
+		t.Fatalf("got status %q, want resolved", interaction.Status)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func taskRows(now time.Time) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"id", "project_id", "repo_id", "title", "description", "status", "assignee_agent_id", "parent_id", "priority", "retry_count", "created_at", "updated_at"})
+}
+
+func interactionRows(now time.Time) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"id", "task_id", "kind", "status", "title", "summary", "payload", "resolution_payload", "continuation_policy", "idempotency_key", "source_comment_id", "source_run_id", "created_by", "resolved_by", "resolved_at", "created_at", "updated_at"})
+}
+
+func wakeupRows(now time.Time) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"id", "agent_id", "task_id", "source", "reason", "payload_json", "context_snapshot", "idempotency_key", "requester_type", "requester_id", "status", "coalesced_count", "run_id", "claimed_at", "finished_at", "error", "created_at", "updated_at"})
 }

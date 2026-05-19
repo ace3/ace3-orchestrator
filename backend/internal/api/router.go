@@ -92,6 +92,7 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Post("/tasks/{id}/wakeups", api.createWakeup)
 		r.Get("/tasks/{id}/interactions", api.listInteractions)
 		r.Post("/tasks/{id}/interactions", api.createInteraction)
+		r.Post("/task-interactions/{id}/answer", api.answerInteraction)
 		r.Post("/task-interactions/{id}/accept", api.acceptInteraction)
 		r.Post("/task-interactions/{id}/reject", api.rejectInteraction)
 		r.Get("/tasks/{id}/liveness", api.taskLiveness)

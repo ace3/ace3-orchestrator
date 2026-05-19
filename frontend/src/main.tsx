@@ -28,6 +28,7 @@ import {
   addComment,
   addRepo,
   acceptInteraction,
+  answerInteraction,
   checkSkillDrift,
   checkSkillSourceUpdates,
   createAgent,
@@ -555,7 +556,7 @@ function ProjectPage({ id, onOpenBoard, onOpenProjects, onDeleted }: { id: strin
 type StatusFilter = "all" | Task["status"];
 type AssigneeFilter = "all" | "unassigned" | string;
 
-const TASK_STATUSES: Task["status"][] = ["todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+const TASK_STATUSES: Task["status"][] = ["todo", "in_progress", "in_review", "waiting", "blocked", "done", "cancelled"];
 const ARTIFACT_KINDS: TaskArtifact["kind"][] = ["pm_document", "pm_handoff", "em_document", "em_handoff", "qa_report", "implementation_note", "run_log", "other"];
 const ARTIFACT_LABELS: Record<TaskArtifact["kind"], string> = {
   pm_document: "PM Document",
@@ -1071,7 +1072,11 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
       onClose={() => setModalOpen(false)}
       onSubmit={submitModal}
     />
-    {selectedTask && <TaskDrawer task={selectedTask} agents={agents} onClose={() => setSelectedTask(null)} onRefresh={async () => { setTasks(await listTasks(project.id)); setSelectedTask(await updateTask(selectedTask.id, selectedTask)); }} />}
+    {selectedTask && <TaskDrawer task={selectedTask} agents={agents} onClose={() => setSelectedTask(null)} onRefresh={async () => {
+      const nextTasks = await listTasks(project.id);
+      setTasks(nextTasks);
+      setSelectedTask(nextTasks.find((item) => item.id === selectedTask.id) || null);
+    }} />}
   </Panel>;
 }
 
@@ -1079,6 +1084,7 @@ const STATUS_LABELS: Record<Task["status"], string> = {
   todo: "Todo",
   in_progress: "In Progress",
   in_review: "In Review",
+  waiting: "Waiting",
   blocked: "Blocked",
   done: "Done",
   cancelled: "Cancelled",
@@ -1099,6 +1105,19 @@ function priorityClass(priority: number): string {
 
 function shortId(id: string): string {
   return id.slice(0, 6).toUpperCase();
+}
+
+function interactionQuestion(interaction: TaskInteraction): string {
+  const question = interaction.payload?.question;
+  return typeof question === "string" ? question : "";
+}
+
+function interactionResolutionText(interaction: TaskInteraction): string {
+  const response = interaction.resolution_payload?.response;
+  const note = interaction.resolution_payload?.note;
+  if (typeof response === "string" && response.trim()) return response;
+  if (typeof note === "string" && note.trim()) return note;
+  return "";
 }
 
 function Kanban({ tasks, agents, onOpen, onMove, onAddInColumn, onEditTask, onDuplicateTask, onDeleteTask }: {
@@ -1208,7 +1227,9 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   const [comment, setComment] = useState("");
   const [artifactForm, setArtifactForm] = useState<{ kind: TaskArtifact["kind"]; title: string; body: string; format: TaskArtifact["format"] }>({ kind: "pm_document", title: "", body: "", format: "markdown" });
   const [editingArtifact, setEditingArtifact] = useState<TaskArtifact | null>(null);
+  const [interactionDrafts, setInteractionDrafts] = useState<Record<string, string>>({});
   const latestRun = runs[0];
+  const hasOpenInteraction = interactions.some((interaction) => interaction.status === "open");
   useEffect(() => {
     listComments(task.id).then(setComments);
     listTaskArtifacts(task.id).then(setArtifacts);
@@ -1229,16 +1250,19 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     setArtifacts(await listTaskArtifacts(task.id));
   }
   async function refreshControlPlane() {
-    const [nextRuns, nextWakeups, nextInteractions, nextLiveness] = await Promise.all([
+    const [nextRuns, nextWakeups, nextInteractions, nextLiveness, nextComments] = await Promise.all([
       listRuns(task.id),
       listWakeups(task.id),
       listInteractions(task.id),
       getTaskLiveness(task.id),
+      listComments(task.id),
     ]);
     setRuns(nextRuns);
     setWakeups(nextWakeups);
     setInteractions(nextInteractions);
     setLiveness(nextLiveness);
+    setComments(nextComments);
+    await onRefresh();
   }
   async function submitArtifact(event: React.FormEvent) {
     event.preventDefault();
@@ -1265,18 +1289,53 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     <span>{agents.find((agent) => agent.id === task.assignee_agent_id)?.name || "Unassigned"} · {task.status} · {task.lifecycle_id || "default"} · retries {task.retry_count}</span>
     <div className="tag-row"><span className={`liveness-${liveness?.liveness || "ready"}`}>{liveness?.liveness || "ready"}</span>{task.execution_state && <span>{task.execution_state}</span>}</div>
     {(task.tags || []).length > 0 && <div className="tag-row">{task.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
-    <div className="toolbar"><button onClick={async () => { await runTask(task.id); await onRefresh(); await refreshControlPlane(); }}><Play size={16} /> Run now</button></div>
+    <div className="toolbar">
+      <button
+        onClick={async () => { await runTask(task.id); await onRefresh(); await refreshControlPlane(); }}
+        disabled={hasOpenInteraction}
+        title={hasOpenInteraction ? "Answer open interaction before running" : "Run task now"}
+      ><Play size={16} /> Run now</button>
+    </div>
     <h3>Interactions</h3>
     <div className="runs">
       {interactions.length === 0 && <p>No interactions yet.</p>}
       {interactions.map((interaction) => (
-        <article key={interaction.id} className="artifact-item">
+        <article key={interaction.id} className={`artifact-item interaction-item ${interaction.status === "open" ? "open" : ""}`}>
           <div className="artifact-head"><strong>{interaction.title || interaction.kind}</strong><span>{interaction.kind} · {interaction.status} · {interaction.continuation_policy}</span></div>
           {interaction.summary && <p>{interaction.summary}</p>}
-          {interaction.status === "open" && <div className="toolbar">
-            <button type="button" onClick={async () => { await acceptInteraction(interaction.id); await refreshControlPlane(); }}><Check size={16} /> Accept</button>
-            <button type="button" onClick={async () => { await rejectInteraction(interaction.id); await refreshControlPlane(); }}><Trash2 size={16} /> Reject</button>
-          </div>}
+          {interactionQuestion(interaction) && <p className="interaction-question">{interactionQuestion(interaction)}</p>}
+          {interaction.status !== "open" && interactionResolutionText(interaction) && <p className="interaction-resolution">{interactionResolutionText(interaction)}</p>}
+          {interaction.status === "open" && interaction.kind === "ask_user_questions" && (
+            <form className="interaction-form" onSubmit={async (event) => {
+              event.preventDefault();
+              const response = (interactionDrafts[interaction.id] || "").trim();
+              if (!response) return;
+              await answerInteraction(interaction.id, response);
+              setInteractionDrafts((current) => ({ ...current, [interaction.id]: "" }));
+              await refreshControlPlane();
+            }}>
+              <textarea
+                value={interactionDrafts[interaction.id] || ""}
+                onChange={(event) => setInteractionDrafts((current) => ({ ...current, [interaction.id]: event.target.value }))}
+                placeholder="Answer required"
+                required
+              />
+              <button type="submit"><MessageSquare size={16} /> Answer</button>
+            </form>
+          )}
+          {interaction.status === "open" && interaction.kind !== "ask_user_questions" && (
+            <form className="interaction-form" onSubmit={(event) => event.preventDefault()}>
+              <textarea
+                value={interactionDrafts[interaction.id] || ""}
+                onChange={(event) => setInteractionDrafts((current) => ({ ...current, [interaction.id]: event.target.value }))}
+                placeholder="Optional note"
+              />
+              <div className="toolbar">
+                <button type="button" onClick={async () => { await acceptInteraction(interaction.id, interactionDrafts[interaction.id] || ""); await refreshControlPlane(); }}><Check size={16} /> Accept</button>
+                <button type="button" onClick={async () => { await rejectInteraction(interaction.id, interactionDrafts[interaction.id] || ""); await refreshControlPlane(); }}><Trash2 size={16} /> Reject</button>
+              </div>
+            </form>
+          )}
         </article>
       ))}
     </div>

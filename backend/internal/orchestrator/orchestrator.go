@@ -86,6 +86,13 @@ func (o *Orchestrator) DispatchOnce(ctx context.Context) (int, error) {
 }
 
 func (o *Orchestrator) EnqueueTask(ctx context.Context, taskID string) (models.AgentWakeup, error) {
+	waiting, err := o.store.HasOpenInteraction(ctx, taskID)
+	if err != nil {
+		return models.AgentWakeup{}, err
+	}
+	if waiting {
+		return models.AgentWakeup{}, store.ErrConflict
+	}
 	return o.store.EnqueueTaskWakeup(ctx, taskID, store.WakeupInput{
 		Source:        "manual",
 		Reason:        "manual_run",

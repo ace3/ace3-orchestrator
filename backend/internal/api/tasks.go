@@ -1,7 +1,9 @@
 package api
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -179,13 +181,41 @@ func (a *API) createInteraction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) acceptInteraction(w http.ResponseWriter, r *http.Request) {
-	interaction, err := a.store.ResolveInteraction(r.Context(), chi.URLParam(r, "id"), "accepted", "human:ignas")
+	var in store.InteractionResolutionInput
+	if err := decodeOptionalResolution(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	interaction, err := a.store.ResolveInteraction(r.Context(), chi.URLParam(r, "id"), "accepted", "human:ignas", in)
 	respond(w, interaction, err)
 }
 
 func (a *API) rejectInteraction(w http.ResponseWriter, r *http.Request) {
-	interaction, err := a.store.ResolveInteraction(r.Context(), chi.URLParam(r, "id"), "rejected", "human:ignas")
+	var in store.InteractionResolutionInput
+	if err := decodeOptionalResolution(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	interaction, err := a.store.ResolveInteraction(r.Context(), chi.URLParam(r, "id"), "rejected", "human:ignas", in)
 	respond(w, interaction, err)
+}
+
+func (a *API) answerInteraction(w http.ResponseWriter, r *http.Request) {
+	var in store.InteractionResolutionInput
+	if err := decodeOptionalResolution(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	interaction, err := a.store.ResolveInteraction(r.Context(), chi.URLParam(r, "id"), "resolved", "human:ignas", in)
+	respond(w, interaction, err)
+}
+
+func decodeOptionalResolution(r *http.Request, in *store.InteractionResolutionInput) error {
+	err := httpx.Decode(r, in)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 func (a *API) taskLiveness(w http.ResponseWriter, r *http.Request) {

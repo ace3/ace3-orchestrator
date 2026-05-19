@@ -208,6 +208,37 @@ func TestAPIRoutesRequireBearerToken(t *testing.T) {
 	}
 }
 
+func TestAnswerInteractionRouteRequiresResponse(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+
+	now := time.Now()
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_interactions WHERE id=$1")).
+		WithArgs("interaction-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "task_id", "kind", "status", "title", "summary", "payload", "resolution_payload", "continuation_policy", "idempotency_key", "source_comment_id", "source_run_id", "created_by", "resolved_by", "resolved_at", "created_at", "updated_at"}).
+			AddRow("interaction-1", "task-1", "ask_user_questions", "open", "Clarify", "", []byte(`{"question":"Which path?"}`), []byte(`{}`), "wake_assignee", nil, nil, nil, "agent:pm", nil, nil, now, now))
+	mock.ExpectRollback()
+
+	handler := NewRouter(config.Config{APIToken: "test-token"}, store.New(sqlx.NewDb(rawDB, "sqlmock"), nil), nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/task-interactions/interaction-1/answer", strings.NewReader(`{"response":""}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "response is required") {
+		t.Fatalf("unexpected response: %s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreateTaskArtifactRoute(t *testing.T) {
 	rawDB, mock, err := sqlmock.New()
 	if err != nil {

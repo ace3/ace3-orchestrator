@@ -100,7 +100,7 @@ Do not run or suggest shell forms that fetch remote code or bypass local review,
 Respond ONLY with a single JSON object matching this schema. No markdown, prose, or code fences:
 {
   "task_updates": {
-    "status": "todo|in_progress|in_review|blocked|done",
+    "status": "todo|in_progress|in_review|waiting|blocked|done",
     "comment": "required summary, max 2000 chars",
     "reassign_to": "pm|em|backend|frontend|qa|<custom>|null",
     "tags": ["frontend-only|backend-only|no-backend|no-frontend|skip-qa|skip-planning|needs-research|needs-tests|needs-browser"],
@@ -118,7 +118,10 @@ Respond ONLY with a single JSON object matching this schema. No markdown, prose,
     "attachments": [
       {"kind": "pm_document|pm_handoff|em_document|em_handoff|qa_report|implementation_note|run_log|other|file|log", "title": "string", "body": "string", "format": "markdown|text|json", "path": "relative/path/in/worktree", "note": "string", "metadata": {}}
     ]
-  }
+  },
+  "human_interactions": [
+    {"kind": "ask_user_questions|request_confirmation|approval_request", "title": "string", "summary": "string", "payload": {"question": "string"}, "continuation_policy": "wake_assignee", "idempotency_key": "optional-stable-key"}
+  ]
 }
 
 Routing notes:
@@ -127,6 +130,7 @@ Routing notes:
 - If you omit "reassign_to" and set status to "done", the task auto-advances to
   the next non-skipped step shown under "PLANNED REMAINING STEPS" below.
 - Use "request_human_review" when you need a human to inspect before advancing.
+- Use "human_interactions" when you cannot continue without a human answer or approval. The orchestrator will set the task to waiting and wake you after the human responds.
 - Use "attachments" to persist PM docs, PM handoffs, EM docs, EM handoffs, QA reports, implementation notes, and run logs as durable task artifacts.
 - Legacy "file" and "log" attachments are accepted and stored as metadata-only artifacts when no body is provided.`)
 	return b.String()

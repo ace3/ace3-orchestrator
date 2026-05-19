@@ -119,6 +119,9 @@ Allowed `status` values:
 - `resolved`
 - `cancelled`
 
+Agent-created human interactions move the task to `waiting`. Heartbeat and
+manual task runs do not continue the task while an open interaction exists.
+
 Create an interaction:
 
 ```http
@@ -143,10 +146,24 @@ Interaction routes:
 
 - `GET /api/tasks/{task_id}/interactions`
 - `POST /api/tasks/{task_id}/interactions`
+- `POST /api/task-interactions/{interaction_id}/answer`
 - `POST /api/task-interactions/{interaction_id}/accept`
 - `POST /api/task-interactions/{interaction_id}/reject`
 
-Accepting an open interaction with `continuation_policy = "wake_assignee"`
+Answering `ask_user_questions` requires:
+
+```json
+{"response": "Use option A."}
+```
+
+Accepting or rejecting approvals can include an optional note:
+
+```json
+{"note": "Approved for the dev environment only."}
+```
+
+Resolving an open interaction with `continuation_policy = "wake_assignee"`
+stores the human response in `resolution_payload`, writes a human comment, and
 creates a wakeup for the task assignee.
 
 ## Runtime Continuity

@@ -89,3 +89,22 @@ func TestLifecycleStepCLIKindMigrationBackfillsExistingDatabases(t *testing.T) {
 		t.Fatalf("cli_kind migration missing backfill column")
 	}
 }
+
+func TestHumanInteractionsMigrationAddsWaitingAndResolutionPayload(t *testing.T) {
+	body, err := migrationFiles.ReadFile("migrations/0009_human_interactions.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	required := []string{
+		"'waiting'",
+		"ADD COLUMN IF NOT EXISTS resolution_payload JSONB NOT NULL DEFAULT '{}'::JSONB",
+		"CREATE OR REPLACE VIEW task_liveness",
+		"t.status = 'waiting'",
+	}
+	for _, item := range required {
+		if !strings.Contains(sql, item) {
+			t.Fatalf("human interactions migration missing %q", item)
+		}
+	}
+}

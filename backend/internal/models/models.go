@@ -180,6 +180,7 @@ type TaskInteraction struct {
 	Title              string          `db:"title" json:"title"`
 	Summary            string          `db:"summary" json:"summary"`
 	Payload            json.RawMessage `db:"payload" json:"payload"`
+	ResolutionPayload  json.RawMessage `db:"resolution_payload" json:"resolution_payload"`
 	ContinuationPolicy string          `db:"continuation_policy" json:"continuation_policy"`
 	IdempotencyKey     *string         `db:"idempotency_key" json:"idempotency_key"`
 	SourceCommentID    *string         `db:"source_comment_id" json:"source_comment_id"`

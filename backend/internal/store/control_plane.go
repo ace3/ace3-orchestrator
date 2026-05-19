@@ -36,6 +36,11 @@ type InteractionInput struct {
 	CreatedBy          string          `json:"created_by"`
 }
 
+type InteractionResolutionInput struct {
+	Response string `json:"response"`
+	Note     string `json:"note"`
+}
+
 type CheckoutInput struct {
 	RunID           *string `json:"run_id"`
 	AssigneeAgentID *string `json:"assignee_agent_id"`
@@ -74,6 +79,12 @@ func (s *Store) EnqueueTaskWakeup(ctx context.Context, taskID string, in WakeupI
 		return models.AgentWakeup{}, errors.New("task has no assignee")
 	}
 	return s.EnqueueWakeup(ctx, taskID, *task.AssigneeAgentID, in)
+}
+
+func (s *Store) HasOpenInteraction(ctx context.Context, taskID string) (bool, error) {
+	var exists bool
+	err := s.db.GetContext(ctx, &exists, "SELECT EXISTS (SELECT 1 FROM task_interactions WHERE task_id=$1 AND status='open')", taskID)
+	return exists, err
 }
 
 func (s *Store) EnqueueWakeup(ctx context.Context, taskID, agentID string, in WakeupInput) (models.AgentWakeup, error) {
@@ -150,7 +161,16 @@ func (s *Store) DispatchWakeups(ctx context.Context, limit int) (int, error) {
 		FROM agents a
 		JOIN tasks t ON t.assignee_agent_id = a.id
 		WHERE a.enabled = true
-		  AND t.status IN ('todo','in_progress','blocked')
+		  AND (
+		      t.status IN ('todo','in_progress','blocked')
+		      OR (
+		          t.status = 'waiting'
+		          AND NOT EXISTS (
+		              SELECT 1 FROM task_interactions i
+		              WHERE i.task_id = t.id AND i.status = 'open'
+		          )
+		      )
+		  )
 		  AND t.retry_count < $2
 		  AND NOT EXISTS (
 		      SELECT 1 FROM runs r
@@ -224,7 +244,7 @@ func (s *Store) ClaimQueuedWakeup(ctx context.Context) (models.Run, bool, error)
 		return models.Run{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE tasks
-		SET status=CASE WHEN status IN ('todo','blocked') THEN 'in_progress' ELSE status END,
+		SET status=CASE WHEN status IN ('todo','waiting','blocked') THEN 'in_progress' ELSE status END,
 		    checkout_run_id=$2,
 		    execution_run_id=$2,
 		    execution_state='running',
@@ -379,8 +399,23 @@ func (s *Store) GetInteraction(ctx context.Context, id string) (models.TaskInter
 }
 
 func (s *Store) CreateInteraction(ctx context.Context, taskID string, in InteractionInput) (models.TaskInteraction, error) {
-	if _, err := s.GetTask(ctx, taskID); err != nil {
-		return models.TaskInteraction{}, err
+	interaction, err := s.createInteraction(ctx, s.db, taskID, in, true)
+	if err == nil {
+		s.Notify(ctx, "interaction", taskID)
+	}
+	return interaction, err
+}
+
+type interactionWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	GetContext(context.Context, any, string, ...any) error
+}
+
+func (s *Store) createInteraction(ctx context.Context, q interactionWriter, taskID string, in InteractionInput, checkTask bool) (models.TaskInteraction, error) {
+	if checkTask {
+		if _, err := s.GetTask(ctx, taskID); err != nil {
+			return models.TaskInteraction{}, err
+		}
 	}
 	kind := strings.TrimSpace(in.Kind)
 	if err := validateInteractionKind(kind); err != nil {
@@ -411,10 +446,10 @@ func (s *Store) CreateInteraction(ctx context.Context, taskID string, in Interac
 	if in.IdempotencyKey != nil && strings.TrimSpace(*in.IdempotencyKey) != "" {
 		key := strings.TrimSpace(*in.IdempotencyKey)
 		var existing models.TaskInteraction
-		err := s.db.GetContext(ctx, &existing, "SELECT * FROM task_interactions WHERE task_id=$1 AND idempotency_key=$2", taskID, key)
+		err := q.GetContext(ctx, &existing, "SELECT * FROM task_interactions WHERE task_id=$1 AND idempotency_key=$2", taskID, key)
 		if err == nil {
 			var same bool
-			if err := s.db.GetContext(ctx, &same, "SELECT payload=$3::jsonb AND kind=$4 AND continuation_policy=$5 FROM task_interactions WHERE task_id=$1 AND idempotency_key=$2", taskID, key, []byte(payload), kind, policy); err != nil {
+			if err := q.GetContext(ctx, &same, "SELECT payload=$3::jsonb AND kind=$4 AND continuation_policy=$5 FROM task_interactions WHERE task_id=$1 AND idempotency_key=$2", taskID, key, []byte(payload), kind, policy); err != nil {
 				return models.TaskInteraction{}, err
 			}
 			if !same {
@@ -428,44 +463,68 @@ func (s *Store) CreateInteraction(ctx context.Context, taskID string, in Interac
 		in.IdempotencyKey = &key
 	}
 	id := uuid.NewString()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO task_interactions (id, task_id, kind, status, title, summary, payload, continuation_policy, idempotency_key, source_comment_id, source_run_id, created_by)
+	if _, err := q.ExecContext(ctx, `INSERT INTO task_interactions (id, task_id, kind, status, title, summary, payload, continuation_policy, idempotency_key, source_comment_id, source_run_id, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		id, taskID, kind, status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Summary), []byte(payload), policy, in.IdempotencyKey, in.SourceCommentID, in.SourceRunID, createdBy); err != nil {
 		return models.TaskInteraction{}, err
 	}
-	s.Notify(ctx, "interaction", taskID)
-	return s.GetInteraction(ctx, id)
+	var interaction models.TaskInteraction
+	if err := q.GetContext(ctx, &interaction, "SELECT * FROM task_interactions WHERE id=$1", id); err != nil {
+		return interaction, err
+	}
+	return interaction, nil
 }
 
-func (s *Store) ResolveInteraction(ctx context.Context, id, status, resolver string) (models.TaskInteraction, error) {
+func (s *Store) ResolveInteraction(ctx context.Context, id, status, resolver string, in InteractionResolutionInput) (models.TaskInteraction, error) {
 	if err := validateInteractionStatus(status); err != nil {
 		return models.TaskInteraction{}, err
 	}
-	if status != "accepted" && status != "rejected" {
-		return models.TaskInteraction{}, errors.New("interaction can only be accepted or rejected")
-	}
-	interaction, err := s.GetInteraction(ctx, id)
+	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
+		return models.TaskInteraction{}, err
+	}
+	var interaction models.TaskInteraction
+	err = tx.GetContext(ctx, &interaction, "SELECT * FROM task_interactions WHERE id=$1", id)
+	if err != nil {
+		_ = tx.Rollback()
+		return interaction, mapNotFound(err)
+	}
+	if err := validateInteractionResolution(interaction.Kind, status, in); err != nil {
+		_ = tx.Rollback()
 		return interaction, err
 	}
 	if interaction.Status != "open" {
+		_ = tx.Rollback()
 		return interaction, ErrConflict
 	}
 	if strings.TrimSpace(resolver) == "" {
 		resolver = "api"
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE task_interactions
-		SET status=$2, resolved_by=$3, resolved_at=now(), updated_at=now()
-		WHERE id=$1 AND status='open'`, id, status, resolver); err != nil {
+	resolution, err := interactionResolutionPayload(status, in)
+	if err != nil {
+		_ = tx.Rollback()
 		return interaction, err
 	}
-	if status == "accepted" && interaction.ContinuationPolicy == "wake_assignee" {
-		body, _ := json.Marshal(map[string]string{"interaction_id": interaction.ID, "kind": interaction.Kind, "status": "accepted"})
+	if _, err := tx.ExecContext(ctx, `UPDATE task_interactions
+		SET status=$2, resolution_payload=$3, resolved_by=$4, resolved_at=now(), updated_at=now()
+		WHERE id=$1 AND status='open'`, id, status, []byte(resolution), resolver); err != nil {
+		_ = tx.Rollback()
+		return interaction, err
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO comments (id, task_id, author, body) VALUES ($1,$2,$3,$4)", uuid.NewString(), interaction.TaskID, resolver, interactionResolutionComment(interaction, status, in)); err != nil {
+		_ = tx.Rollback()
+		return interaction, err
+	}
+	if err := tx.Commit(); err != nil {
+		return interaction, err
+	}
+	if interaction.ContinuationPolicy == "wake_assignee" {
+		body, _ := json.Marshal(map[string]any{"interaction_id": interaction.ID, "kind": interaction.Kind, "status": status, "resolution": json.RawMessage(resolution)})
 		_, err := s.EnqueueTaskWakeup(ctx, interaction.TaskID, WakeupInput{
 			Source:          "interaction",
-			Reason:          "interaction_accepted",
+			Reason:          "interaction_resolved",
 			PayloadJSON:     body,
-			ContextSnapshot: json.RawMessage(fmt.Sprintf(`{"task_id":%q,"interaction_id":%q,"wake_reason":"interaction_accepted","source":"task_interaction"}`, interaction.TaskID, interaction.ID)),
+			ContextSnapshot: json.RawMessage(fmt.Sprintf(`{"task_id":%q,"interaction_id":%q,"wake_reason":"interaction_resolved","source":"task_interaction"}`, interaction.TaskID, interaction.ID)),
 			RequesterType:   "interaction",
 			RequesterID:     &interaction.ID,
 		})
@@ -475,6 +534,57 @@ func (s *Store) ResolveInteraction(ctx context.Context, id, status, resolver str
 	}
 	s.Notify(ctx, "interaction", interaction.TaskID)
 	return s.GetInteraction(ctx, id)
+}
+
+func validateInteractionResolution(kind, status string, in InteractionResolutionInput) error {
+	switch status {
+	case "resolved":
+		if kind != "ask_user_questions" {
+			return errors.New("only question interactions can be answered")
+		}
+		if strings.TrimSpace(in.Response) == "" {
+			return errors.New("response is required")
+		}
+	case "accepted", "rejected":
+		if kind == "ask_user_questions" {
+			return errors.New("question interactions require an answer")
+		}
+	default:
+		return errors.New("interaction can only be answered, accepted, or rejected")
+	}
+	return nil
+}
+
+func interactionResolutionPayload(status string, in InteractionResolutionInput) (json.RawMessage, error) {
+	body, err := json.Marshal(map[string]string{
+		"status":   status,
+		"response": strings.TrimSpace(in.Response),
+		"note":     strings.TrimSpace(in.Note),
+	})
+	return json.RawMessage(body), err
+}
+
+func interactionResolutionComment(interaction models.TaskInteraction, status string, in InteractionResolutionInput) string {
+	title := interaction.Title
+	if title == "" {
+		title = interaction.Kind
+	}
+	switch status {
+	case "resolved":
+		return fmt.Sprintf("Answered %q: %s", title, strings.TrimSpace(in.Response))
+	case "accepted":
+		if note := strings.TrimSpace(in.Note); note != "" {
+			return fmt.Sprintf("Accepted %q: %s", title, note)
+		}
+		return fmt.Sprintf("Accepted %q.", title)
+	case "rejected":
+		if note := strings.TrimSpace(in.Note); note != "" {
+			return fmt.Sprintf("Rejected %q: %s", title, note)
+		}
+		return fmt.Sprintf("Rejected %q.", title)
+	default:
+		return fmt.Sprintf("Resolved %q.", title)
+	}
 }
 
 func (s *Store) GetTaskLiveness(ctx context.Context, taskID string) (models.TaskLiveness, error) {

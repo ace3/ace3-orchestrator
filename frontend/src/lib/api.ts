@@ -96,7 +96,7 @@ export type Task = {
   repo_id: string | null;
   title: string;
   description: string;
-  status: "todo" | "in_progress" | "in_review" | "blocked" | "done" | "cancelled";
+  status: "todo" | "in_progress" | "in_review" | "waiting" | "blocked" | "done" | "cancelled";
   assignee_agent_id: string | null;
   parent_id: string | null;
   priority: number;
@@ -190,6 +190,7 @@ export type TaskInteraction = {
   title: string;
   summary: string;
   payload: Record<string, unknown>;
+  resolution_payload: Record<string, unknown>;
   continuation_policy: "none" | "wake_assignee";
   idempotency_key: string | null;
   source_comment_id: string | null;
@@ -431,8 +432,9 @@ export const listRuns = (taskId: string) => api<Run[]>(`/tasks/${taskId}/runs`);
 export const listRunEvents = (runId: string, since = 0) => api<RunEvent[]>(`/runs/${runId}/events?since=${since}`);
 export const listWakeups = (taskId: string) => api<AgentWakeup[]>(`/tasks/${taskId}/wakeups`);
 export const listInteractions = (taskId: string) => api<TaskInteraction[]>(`/tasks/${taskId}/interactions`);
-export const acceptInteraction = (id: string) => api<TaskInteraction>(`/task-interactions/${id}/accept`, { method: "POST" });
-export const rejectInteraction = (id: string) => api<TaskInteraction>(`/task-interactions/${id}/reject`, { method: "POST" });
+export const answerInteraction = (id: string, response: string) => api<TaskInteraction>(`/task-interactions/${id}/answer`, { method: "POST", body: JSON.stringify({ response }) });
+export const acceptInteraction = (id: string, note = "") => api<TaskInteraction>(`/task-interactions/${id}/accept`, { method: "POST", body: JSON.stringify({ note }) });
+export const rejectInteraction = (id: string, note = "") => api<TaskInteraction>(`/task-interactions/${id}/reject`, { method: "POST", body: JSON.stringify({ note }) });
 export const getTaskLiveness = (taskId: string) => api<TaskLiveness>(`/tasks/${taskId}/liveness`);
 export const getActiveRun = (taskId: string) => api<Run | null>(`/tasks/${taskId}/active-run`);
 export const heartbeat = () => api<{ queued: number }>("/heartbeat", { method: "POST" });
