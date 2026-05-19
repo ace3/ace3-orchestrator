@@ -1,4 +1,4 @@
-.PHONY: fmt backend-test frontend-build audit test e2e-one-task skills-sync skills-check skills-update-check skills-pin local-env local-cli-env local-db-up local-db-check local-db-down local-db-ps local-db-logs local-backend local-backend-cli local-frontend local-dev local-dev-cli docker-up docker-down docker-ps docker-logs
+.PHONY: fmt backend-test frontend-build audit test e2e-one-task skills-sync skills-check skills-update-check skills-pin local-env local-cli-env local-db-up local-db-check local-db-down local-db-ps local-db-logs local-backend local-backend-cli local-frontend local-dev local-dev-cli local-stop docker-up docker-down docker-ps docker-logs
 
 fmt:
 	cd backend && gofmt -w $$(find . -name '*.go')
@@ -88,6 +88,43 @@ local-dev-cli: local-cli-env local-db-check
 	sleep 1; \
 	if ! kill -0 "$$backend_pid" 2>/dev/null; then wait "$$backend_pid"; exit $$?; fi; \
 	cd frontend && npm install && npm run dev
+
+local-stop:
+	@ports="5173"; \
+	if [ -f deploy/.env.local ]; then \
+		set -a; . ./deploy/.env.local; set +a; \
+		ports="$$ports $${MP_PORT:-18081}"; \
+	else \
+		ports="$$ports 18081"; \
+	fi; \
+	if [ -f deploy/.env.local.cli ]; then \
+		set -a; . ./deploy/.env.local.cli; set +a; \
+		ports="$$ports $${MP_PORT:-18082}"; \
+	else \
+		ports="$$ports 18082"; \
+	fi; \
+	killed=0; \
+	for port in $$ports; do \
+		attempt=1; \
+		while pids=$$(lsof -tiTCP:$$port -sTCP:LISTEN 2>/dev/null || true); [ -n "$$pids" ]; do \
+			if [ "$$attempt" -eq 1 ]; then \
+				echo "stopping listener(s) on port $$port: $$pids"; \
+				kill $$pids 2>/dev/null || true; \
+			elif [ "$$attempt" -le 5 ]; then \
+				echo "force stopping listener(s) on port $$port: $$pids"; \
+				kill -9 $$pids 2>/dev/null || true; \
+			else \
+				echo "failed to stop listener(s) on port $$port: $$pids"; \
+				exit 1; \
+			fi; \
+			killed=1; \
+			attempt=$$((attempt + 1)); \
+			sleep 1; \
+		done; \
+	done; \
+	if [ "$$killed" -eq 0 ]; then \
+		echo "no local app listeners found"; \
+	fi
 
 docker-up:
 	cp -n deploy/.env.example deploy/.env || true
