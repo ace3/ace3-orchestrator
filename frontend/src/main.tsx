@@ -1364,121 +1364,503 @@ function AgentDetailPage({ id, onSaved }: { id: string; onSaved: (id: string) =>
   </Panel>;
 }
 
+function relativeTime(iso: string | null): string {
+  if (!iso) return "never";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "never";
+  const diff = Date.now() - then;
+  if (diff < 0) return "just now";
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+function SourceFormModal({ open, onClose, onSubmit }: {
+  open: boolean;
+  onClose: () => void;
+  onSubmit: (values: { name: string; upstream_url: string; pinned_sha: string; kind: string }) => Promise<void>;
+}) {
+  const [values, setValues] = useState({ name: "", upstream_url: "", pinned_sha: "main", kind: "custom" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    setValues({ name: "", upstream_url: "", pinned_sha: "main", kind: "custom" });
+    setBusy(false);
+    setErr("");
+  }, [open]);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!values.name.trim() || !values.upstream_url.trim()) return;
+    setBusy(true);
+    setErr("");
+    try { await onSubmit(values); onClose(); }
+    catch (e2) { setErr((e2 as Error).message); setBusy(false); }
+  }
+  return (
+    <Modal open={open} onClose={busy ? () => undefined : onClose} title="Add skill source" footer={
+      <>
+        <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="submit" form="source-modal-form" disabled={busy || !values.name.trim() || !values.upstream_url.trim()}>
+          <Plus size={14} /> Add source
+        </button>
+      </>
+    }>
+      <form id="source-modal-form" className="task-modal-form" onSubmit={submit}>
+        {err && <Error text={err} />}
+        <label className="field">
+          <span className="field-label">Name</span>
+          <input autoFocus value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} placeholder="my-skills" required />
+        </label>
+        <label className="field">
+          <span className="field-label">Git URL</span>
+          <input value={values.upstream_url} onChange={(e) => setValues({ ...values, upstream_url: e.target.value })} placeholder="git@github.com:org/skills.git" required />
+        </label>
+        <div className="task-modal-grid">
+          <label className="field">
+            <span className="field-label">Pinned SHA or branch</span>
+            <input value={values.pinned_sha} onChange={(e) => setValues({ ...values, pinned_sha: e.target.value })} required />
+          </label>
+          <label className="field">
+            <span className="field-label">Kind</span>
+            <select value={values.kind} onChange={(e) => setValues({ ...values, kind: e.target.value })}>
+              <option value="custom">custom</option>
+              <option value="ace3">ace3</option>
+              <option value="verzth">verzth</option>
+            </select>
+          </label>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function PinModal({ open, source, onClose, onSubmit }: {
+  open: boolean;
+  source: SkillSource | null;
+  onClose: () => void;
+  onSubmit: (sha: string) => Promise<void>;
+}) {
+  const [sha, setSha] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (!open || !source) return;
+    setSha(source.pinned_sha);
+    setBusy(false);
+    setErr("");
+  }, [open, source]);
+  if (!source) return null;
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!sha.trim() || sha === source!.pinned_sha) return;
+    setBusy(true);
+    setErr("");
+    try { await onSubmit(sha.trim()); onClose(); }
+    catch (e2) { setErr((e2 as Error).message); setBusy(false); }
+  }
+  return (
+    <Modal open={open} onClose={busy ? () => undefined : onClose} title={`Pin ${source.name}`} footer={
+      <>
+        <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+        <button type="submit" form="pin-modal-form" disabled={busy || !sha.trim() || sha === source.pinned_sha}>
+          Pin & re-sync
+        </button>
+      </>
+    }>
+      <form id="pin-modal-form" className="task-modal-form" onSubmit={submit}>
+        {err && <Error text={err} />}
+        <p className="modal-warning">
+          Changing the pinned SHA re-syncs all skills from this source. Existing skills may be added, removed, or updated.
+        </p>
+        <label className="field">
+          <span className="field-label">Current pin</span>
+          <input value={source.pinned_sha} disabled />
+        </label>
+        <label className="field">
+          <span className="field-label">New SHA or branch</span>
+          <input autoFocus value={sha} onChange={(e) => setSha(e.target.value)} placeholder="main, v1.2.3, or a commit SHA" required />
+        </label>
+      </form>
+    </Modal>
+  );
+}
+
+function SourceMenu({ source, onSync, onPin, onDelete }: {
+  source: SkillSource;
+  onSync: () => void;
+  onPin: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  function closeAll() { setOpen(false); setConfirmDel(false); }
+  return (
+    <div className="menu-anchor">
+      <button type="button" className="col-action" aria-label="Source actions" onClick={() => { setOpen((v) => !v); setConfirmDel(false); }}>
+        <MoreHorizontal size={14} />
+      </button>
+      <Menu open={open && !confirmDel} onClose={closeAll}>
+        <button type="button" onClick={() => { closeAll(); onSync(); }}>Sync now</button>
+        <button type="button" onClick={() => { closeAll(); onPin(); }}>Pin SHA…</button>
+        <button type="button" onClick={() => { closeAll(); window.open(source.upstream_url, "_blank", "noopener"); }}>Open repo URL</button>
+        <div className="sep" />
+        <button type="button" className="danger" onClick={() => setConfirmDel(true)}>Delete source</button>
+      </Menu>
+      {confirmDel && (
+        <div className="menu menu-confirm" role="dialog" aria-label="Confirm delete">
+          <p>Delete <strong>{source.name}</strong> and all its installed skills?</p>
+          <div className="menu-confirm-actions">
+            <button type="button" onClick={closeAll}>Cancel</button>
+            <button type="button" className="danger-button" onClick={() => { closeAll(); onDelete(); }}>Delete</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SkillSort = "name" | "source" | "agents" | "stale";
+
 function SkillSourcesPage() {
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [agentList, setAgentList] = useState<Agent[]>([]);
+  const [map, setMap] = useState<OrchestratorMap | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [tree, setTree] = useState<SkillTreeEntry | null>(null);
   const [content, setContent] = useState<{ path: string; content: string } | null>(null);
-  const [sha, setSha] = useState<Record<string, string>>({});
-  const [form, setForm] = useState({
-    name: "",
-    upstream_url: "",
-    pinned_sha: "main",
-    kind: "custom",
-  });
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<SkillSort>("source");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [addOpen, setAddOpen] = useState(false);
+  const [pinTarget, setPinTarget] = useState<SkillSource | null>(null);
+
   async function refresh() {
-    const [nextSources, nextSkills] = await Promise.all([listSkillSources(), listInstalledSkills()]);
+    const [nextSources, nextSkills, nextAgents, nextMap] = await Promise.all([
+      listSkillSources(),
+      listInstalledSkills(),
+      listAgents().catch(() => [] as Agent[]),
+      getOrchestratorMap().catch(() => null as OrchestratorMap | null),
+    ]);
     setSources(nextSources);
     setSkills(nextSkills);
+    setAgentList(nextAgents);
+    setMap(nextMap);
   }
   useEffect(() => { refresh().catch((e) => setError(e.message)); }, []);
-  const sourceNames = useMemo(() => Object.fromEntries(sources.map((source) => [source.id, source.name])), [sources]);
+
+  const sourceNames = useMemo(() => Object.fromEntries(sources.map((s) => [s.id, s.name])), [sources]);
+
+  const usedByMap = useMemo(() => {
+    const m = new Map<string, Agent[]>();
+    for (const agent of agentList) {
+      for (const skill of agent.skills || []) {
+        const arr = m.get(skill.id) || [];
+        arr.push(agent);
+        m.set(skill.id, arr);
+      }
+    }
+    return m;
+  }, [agentList]);
+
+  const recommendedByMap = useMemo(() => {
+    const m = new Map<string, string[]>();
+    if (!map) return m;
+    for (const skill of map.skills) {
+      if (skill.recommended_agents && skill.recommended_agents.length > 0) {
+        m.set(skill.id, skill.recommended_agents);
+      }
+    }
+    return m;
+  }, [map]);
+
+  const filteredSkills = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let result = skills.slice();
+    if (q) {
+      result = result.filter((s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.path_in_source.toLowerCase().includes(q) ||
+        (sourceNames[s.source_id] || "").toLowerCase().includes(q)
+      );
+    }
+    if (sort === "name") {
+      result.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sort === "agents") {
+      result.sort((a, b) => (usedByMap.get(b.id)?.length || 0) - (usedByMap.get(a.id)?.length || 0));
+    } else if (sort === "stale") {
+      const stamp = (s: Skill) => {
+        const src = sources.find((x) => x.id === s.source_id);
+        return src?.last_synced_at ? new Date(src.last_synced_at).getTime() : 0;
+      };
+      result.sort((a, b) => stamp(a) - stamp(b));
+    } else {
+      result.sort((a, b) => (sourceNames[a.source_id] || "").localeCompare(sourceNames[b.source_id] || "") || a.name.localeCompare(b.name));
+    }
+    return result;
+  }, [skills, search, sort, sourceNames, usedByMap, sources]);
+
+  const groupedSkills = useMemo(() => {
+    if (sort !== "source") return null;
+    const groups: { source: SkillSource | null; skills: Skill[] }[] = [];
+    for (const source of sources) {
+      const items = filteredSkills.filter((s) => s.source_id === source.id);
+      if (items.length === 0 && search.trim()) continue;
+      groups.push({ source, skills: items });
+    }
+    const orphans = filteredSkills.filter((s) => !sources.some((src) => src.id === s.source_id));
+    if (orphans.length > 0) groups.push({ source: null, skills: orphans });
+    return groups;
+  }, [filteredSkills, sources, sort, search]);
 
   async function openSkill(skill: Skill, path = "SKILL.md") {
     setSelectedSkill(skill);
     setError("");
+    setTree(null);
+    setContent(null);
     try {
       const [nextTree, nextContent] = await Promise.all([getSkillTree(skill.id), getSkillContent(skill.id, path)]);
       setTree(nextTree.root);
       setContent({ path: nextContent.path, content: nextContent.content });
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    } catch (e) { setError((e as Error).message); }
   }
-
   async function openFile(path: string) {
     if (!selectedSkill) return;
     try {
       const nextContent = await getSkillContent(selectedSkill.id, path);
       setContent({ path: nextContent.path, content: nextContent.content });
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    } catch (e) { setError((e as Error).message); }
   }
+
+  async function handleAdd(values: { name: string; upstream_url: string; pinned_sha: string; kind: string }) {
+    await createSkillSource(values);
+    await refresh();
+  }
+  async function handleSync(source: SkillSource) {
+    setError("");
+    setBusy((prev) => ({ ...prev, [source.id]: "syncing" }));
+    try { await syncSkillSource(source.id); await refresh(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy((prev) => { const { [source.id]: _, ...rest } = prev; return rest; }); }
+  }
+  async function handlePin(source: SkillSource, sha: string) {
+    setBusy((prev) => ({ ...prev, [source.id]: "pinning" }));
+    try { await pinSkillSource(source.id, sha); await refresh(); }
+    finally { setBusy((prev) => { const { [source.id]: _, ...rest } = prev; return rest; }); }
+  }
+  async function handleDelete(source: SkillSource) {
+    setBusy((prev) => ({ ...prev, [source.id]: "deleting" }));
+    try {
+      await deleteSkillSource(source.id);
+      if (selectedSkill && selectedSkill.source_id === source.id) {
+        setSelectedSkill(null); setTree(null); setContent(null);
+      }
+      await refresh();
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy((prev) => { const { [source.id]: _, ...rest } = prev; return rest; }); }
+  }
+
+  const totalSkills = skills.length;
+  const totalAgents = agentList.length;
+  const recommendedCount = recommendedByMap.size;
 
   return <Panel title="Skill Sources">
     <Error text={error} />
-    <form className="editor" onSubmit={async (e) => {
-      e.preventDefault();
-      setError("");
-      try {
-        await createSkillSource(form);
-        setForm({ name: "", upstream_url: "", pinned_sha: "main", kind: "custom" });
-        await refresh();
-      } catch (err) {
-        setError((err as Error).message);
-      }
-    }}>
-      <h2 className="section-title">Add Source</h2>
-      <div className="form-grid">
-        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" required />
-        <input value={form.upstream_url} onChange={(e) => setForm({ ...form, upstream_url: e.target.value })} placeholder="Git URL" required />
-        <input value={form.pinned_sha} onChange={(e) => setForm({ ...form, pinned_sha: e.target.value })} placeholder="Pinned SHA or branch" required />
-        <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-          <option value="custom">custom</option>
-          <option value="ace3">ace3</option>
-          <option value="verzth">verzth</option>
+
+    <div className="board-toolbar">
+      <div className="source-stats">
+        <span><strong>{sources.length}</strong> source{sources.length === 1 ? "" : "s"}</span>
+        <span><strong>{totalSkills}</strong> skill{totalSkills === 1 ? "" : "s"}</span>
+        <span><strong>{totalAgents}</strong> agent{totalAgents === 1 ? "" : "s"}</span>
+        {recommendedCount > 0 && <span><strong>{recommendedCount}</strong> recommended</span>}
+      </div>
+      <div className="board-toolbar-actions">
+        <button type="button" className="primary-button" onClick={() => setAddOpen(true)}><Plus size={16} /> Add source</button>
+      </div>
+    </div>
+
+    {sources.length === 0 ? (
+      <div className="empty-state source-empty">
+        <p><strong>No sources yet.</strong></p>
+        <p>Add an upstream git repository to discover skills. Sources can be pinned to a SHA or tracked from a branch.</p>
+        <button type="button" className="primary-button" onClick={() => setAddOpen(true)}><Plus size={16} /> Add your first source</button>
+      </div>
+    ) : (
+      <div className="source-grid">
+        {sources.map((source) => {
+          const skillCount = skills.filter((s) => s.source_id === source.id).length;
+          const status = busy[source.id];
+          return (
+            <article className="source-card" key={source.id}>
+              <div className="source-card-head">
+                <div className="source-card-title">
+                  <strong>{source.name}</strong>
+                  <span className="badge badge-kind">{source.kind}</span>
+                  {source.has_update && <span className="badge badge-update" title="A newer commit is available on the upstream branch">Update available</span>}
+                  {status && <span className="badge badge-busy">{status}…</span>}
+                </div>
+                <SourceMenu
+                  source={source}
+                  onSync={() => handleSync(source)}
+                  onPin={() => setPinTarget(source)}
+                  onDelete={() => handleDelete(source)}
+                />
+              </div>
+              <p className="source-url">{source.upstream_url}</p>
+              <div className="source-meta">
+                <span>pinned <code>{source.pinned_sha}</code></span>
+                <span>{skillCount} skill{skillCount === 1 ? "" : "s"}</span>
+                <span title={source.last_synced_at || "never synced"}>synced {relativeTime(source.last_synced_at)}</span>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    )}
+
+    <div className="skills-toolbar">
+      <h2 className="section-title">Installed Skills</h2>
+      <div className="skills-controls">
+        <input
+          className="skills-search"
+          placeholder="Search skills, paths, sources…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select value={sort} onChange={(e) => setSort(e.target.value as SkillSort)} aria-label="Sort skills">
+          <option value="source">Group by source</option>
+          <option value="name">Name (A–Z)</option>
+          <option value="agents">Most used by agents</option>
+          <option value="stale">Stalest sync first</option>
         </select>
       </div>
-      <button><Plus size={16} /> Add source</button>
-    </form>
-    <div className="list">{sources.map((source) => <article key={source.id}>
-      <h3>{source.name}</h3>
-      <p>{source.upstream_url}</p>
-      <span>{source.kind} · pinned {source.pinned_sha} · {source.last_synced_at ? "synced" : "never synced"}</span>
-      <div className="toolbar">
-        <button onClick={async () => { await syncSkillSource(source.id); await refresh(); }}><RefreshCw size={16} /> Sync</button>
-        <input placeholder="New SHA" value={sha[source.id] || ""} onChange={(e) => setSha({ ...sha, [source.id]: e.target.value })} />
-        <button onClick={async () => { await pinSkillSource(source.id, sha[source.id]); await refresh(); }}>Pin</button>
-        <button onClick={async () => { await deleteSkillSource(source.id); await refresh(); }}><Trash2 size={16} /> Delete</button>
+    </div>
+
+    {totalSkills === 0 ? (
+      <p className="empty-state">No installed skills yet. Sync a source to discover its skills.</p>
+    ) : filteredSkills.length === 0 ? (
+      <p className="empty-state">No skills match “{search}”.</p>
+    ) : groupedSkills ? (
+      <div className="skill-groups">
+        {groupedSkills.map(({ source, skills: items }) => {
+          const key = source?.id || "__orphans__";
+          const isCollapsed = !!collapsed[key];
+          return (
+            <section className="skill-group" key={key}>
+              <header
+                className="skill-group-head"
+                onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}
+                role="button"
+                tabIndex={0}
+              >
+                <span className={`chevron ${isCollapsed ? "right" : "down"}`} aria-hidden="true">▾</span>
+                <strong>{source?.name || "Orphaned skills (source removed)"}</strong>
+                <span className="count-badge">{items.length}</span>
+                {source && <span className="skill-group-meta">pinned <code>{source.pinned_sha}</code> · synced {relativeTime(source.last_synced_at)}</span>}
+              </header>
+              {!isCollapsed && (
+                <div className="skill-rows">
+                  {items.length === 0 ? (
+                    <p className="empty-state">No skills in this source.</p>
+                  ) : items.map((skill) => {
+                    const users = usedByMap.get(skill.id) || [];
+                    const recommended = recommendedByMap.get(skill.id) || [];
+                    return (
+                      <button
+                        type="button"
+                        key={skill.id}
+                        className={`skill-row ${selectedSkill?.id === skill.id ? "active" : ""}`}
+                        onClick={() => openSkill(skill)}
+                      >
+                        <div className="skill-row-main">
+                          <span className="skill-row-name">{skill.name}</span>
+                          <span className="skill-row-path">{skill.path_in_source}</span>
+                        </div>
+                        <div className="skill-row-meta">
+                          {skill.version && <span className="badge badge-version">{skill.version}</span>}
+                          {users.length > 0 && (
+                            <span className="badge badge-agents" title={users.map((a) => a.name).join(", ")}>
+                              {users.length} agent{users.length === 1 ? "" : "s"}
+                            </span>
+                          )}
+                          {recommended.length > 0 && (
+                            <span className="badge badge-recommended" title={`Recommended for: ${recommended.join(", ")}`}>
+                              recommended × {recommended.length}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })}
       </div>
-    </article>)}</div>
-    <h2 className="section-title">Installed Skills</h2>
-    {skills.length === 0 ? <p className="empty-state">No installed skills yet. Sync a skill source to discover active skills.</p> :
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Skill</th>
-              <th>Source</th>
-              <th>Path</th>
-              <th>Version</th>
-            </tr>
-          </thead>
-          <tbody>
-            {skills.map((skill) => <tr key={skill.id} className={selectedSkill?.id === skill.id ? "selected-row" : ""} onClick={() => openSkill(skill)}>
-              <td>{skill.name}</td>
-              <td>{sourceNames[skill.source_id] || skill.source_id}</td>
-              <td>{skill.path_in_source}</td>
-              <td>{skill.version || "n/a"}</td>
-            </tr>)}
-          </tbody>
-        </table>
-      </div>}
-    <h2 className="section-title">Browse Skill Content</h2>
-    {!selectedSkill ? <p className="empty-state">Select an installed skill to browse its synced files.</p> :
-      <div className="browser-grid">
-        <div className="tree-pane">
-          <h3>{selectedSkill.name}</h3>
-          {tree ? <SkillTree node={tree} onOpen={openFile} /> : <p className="empty-state">Loading tree...</p>}
+    ) : (
+      <div className="skill-rows skill-rows-flat">
+        {filteredSkills.map((skill) => {
+          const users = usedByMap.get(skill.id) || [];
+          const recommended = recommendedByMap.get(skill.id) || [];
+          return (
+            <button
+              type="button"
+              key={skill.id}
+              className={`skill-row ${selectedSkill?.id === skill.id ? "active" : ""}`}
+              onClick={() => openSkill(skill)}
+            >
+              <div className="skill-row-main">
+                <span className="skill-row-name">{skill.name}</span>
+                <span className="skill-row-path">{sourceNames[skill.source_id] || skill.source_id} · {skill.path_in_source}</span>
+              </div>
+              <div className="skill-row-meta">
+                {skill.version && <span className="badge badge-version">{skill.version}</span>}
+                {users.length > 0 && <span className="badge badge-agents">{users.length} agent{users.length === 1 ? "" : "s"}</span>}
+                {recommended.length > 0 && <span className="badge badge-recommended">rec × {recommended.length}</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    )}
+
+    {selectedSkill && (
+      <>
+        <h2 className="section-title">Browse — {selectedSkill.name}</h2>
+        <div className="browser-grid">
+          <div className="tree-pane">
+            {tree ? <SkillTree node={tree} onOpen={openFile} /> : <p className="empty-state">Loading tree…</p>}
+          </div>
+          <div className="preview-pane">
+            <div className="artifact-head">
+              <strong>{content?.path || "SKILL.md"}</strong>
+              <span>{sourceNames[selectedSkill.source_id] || selectedSkill.source_id}</span>
+            </div>
+            <pre>{content?.content || "No preview available."}</pre>
+          </div>
         </div>
-        <div className="preview-pane">
-          <div className="artifact-head"><strong>{content?.path || "SKILL.md"}</strong><span>{sourceNames[selectedSkill.source_id] || selectedSkill.source_id}</span></div>
-          <pre>{content?.content || "No preview available."}</pre>
-        </div>
-      </div>}
+      </>
+    )}
+
+    <SourceFormModal open={addOpen} onClose={() => setAddOpen(false)} onSubmit={handleAdd} />
+    <PinModal
+      open={!!pinTarget}
+      source={pinTarget}
+      onClose={() => setPinTarget(null)}
+      onSubmit={async (sha) => { if (pinTarget) await handlePin(pinTarget, sha); }}
+    />
   </Panel>;
 }
 
