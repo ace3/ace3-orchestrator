@@ -419,6 +419,7 @@ export const deleteProject = (id: string) => api<{ deleted: boolean }>(`/project
 export const addRepo = (projectId: string, body: { local_path: string; default_branch?: string }) => api<Repo>(`/projects/${projectId}/repos`, { method: "POST", body: JSON.stringify(body) });
 export const deleteRepo = (id: string) => api<{ deleted: boolean }>(`/repos/${id}`, { method: "DELETE" });
 export const listTasks = (projectId: string) => api<Task[]>(`/projects/${projectId}/tasks`);
+export const getTask = (id: string) => api<Task>(`/tasks/${id}`);
 export const createTask = (projectId: string, body: Partial<Task>) => api<Task>(`/projects/${projectId}/tasks`, { method: "POST", body: JSON.stringify(body) });
 export const updateTask = (id: string, body: Partial<Task>) => api<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const listComments = (taskId: string) => api<Comment[]>(`/tasks/${taskId}/comments`);
