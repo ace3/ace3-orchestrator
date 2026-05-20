@@ -56,7 +56,8 @@ func (s *Store) CreateDraft(ctx context.Context, in DraftCreateInput) (DraftTurn
 	}
 	conversation := []DraftMessage{draftMessage("assistant", "What's the goal?")}
 	convJSON, _ := json.Marshal(conversation)
-	briefJSON, _ := json.Marshal(DraftBrief{})
+	brief := emptyDraftBrief()
+	briefJSON, _ := json.Marshal(brief)
 	id := uuid.NewString()
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO task_drafts (id, author, repo_id, conversation, preview_brief)
 		VALUES ($1,$2,$3,$4,$5)`, id, author, in.RepoID, convJSON, briefJSON); err != nil {
@@ -66,7 +67,7 @@ func (s *Store) CreateDraft(ctx context.Context, in DraftCreateInput) (DraftTurn
 	if err != nil {
 		return DraftTurnResult{}, err
 	}
-	return DraftTurnResult{Draft: draft, Conversation: conversation, PreviewBrief: DraftBrief{}, AssistantMessage: conversation[0].Content}, nil
+	return DraftTurnResult{Draft: draft, Conversation: conversation, PreviewBrief: brief, AssistantMessage: conversation[0].Content}, nil
 }
 
 func (s *Store) GetDraft(ctx context.Context, id string) (models.TaskDraft, error) {
@@ -188,9 +189,22 @@ func decodeDraftConversation(raw json.RawMessage) []DraftMessage {
 }
 
 func decodeDraftBrief(raw json.RawMessage) DraftBrief {
-	var brief DraftBrief
+	brief := emptyDraftBrief()
 	_ = json.Unmarshal(raw, &brief)
+	if brief.AcceptanceCriteria == nil {
+		brief.AcceptanceCriteria = []string{}
+	}
+	if brief.TargetFiles == nil {
+		brief.TargetFiles = []string{}
+	}
 	return brief
+}
+
+func emptyDraftBrief() DraftBrief {
+	return DraftBrief{
+		AcceptanceCriteria: []string{},
+		TargetFiles:        []string{},
+	}
 }
 
 func buildDraftBrief(conversation []DraftMessage) DraftBrief {
@@ -201,7 +215,7 @@ func buildDraftBrief(conversation []DraftMessage) DraftBrief {
 		}
 	}
 	if len(userMessages) == 0 {
-		return DraftBrief{}
+		return emptyDraftBrief()
 	}
 	goal := userMessages[0]
 	if len(userMessages) > 1 {

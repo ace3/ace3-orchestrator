@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -1031,6 +1032,29 @@ func TestDraftBriefExtractsGoalAcceptanceAndTargets(t *testing.T) {
 	}
 	if len(brief.TargetFiles) == 0 || brief.TargetFiles[0] != "/api/login" {
 		t.Fatalf("unexpected target files: %+v", brief.TargetFiles)
+	}
+}
+
+func TestEmptyDraftBriefUsesJSONArrays(t *testing.T) {
+	body, err := json.Marshal(emptyDraftBrief())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+	for _, want := range []string{`"acceptance_criteria":[]`, `"target_files":[]`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %s in %s", want, got)
+		}
+	}
+}
+
+func TestDecodeDraftBriefNormalizesNullArrays(t *testing.T) {
+	brief := decodeDraftBrief(json.RawMessage(`{"title":"","goal":"","acceptance_criteria":null,"target_files":null,"notes":""}`))
+	if brief.AcceptanceCriteria == nil {
+		t.Fatal("expected acceptance criteria to be an empty array")
+	}
+	if brief.TargetFiles == nil {
+		t.Fatal("expected target files to be an empty array")
 	}
 }
 
