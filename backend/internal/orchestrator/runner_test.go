@@ -173,7 +173,8 @@ func TestBuildPromptIncludesActiveSkillInstructions(t *testing.T) {
 		!strings.Contains(prompt, "Use repository-local backend conventions.") ||
 		!strings.Contains(prompt, `"tags":`) ||
 		!strings.Contains(prompt, `"lifecycle_id":`) ||
-		!strings.Contains(prompt, "Use only the active skills and skill instructions embedded in this prompt") {
+		!strings.Contains(prompt, "Use only the active skills and skill instructions embedded in this prompt") ||
+		!strings.Contains(prompt, "do not put those blocked literals inside heredocs") {
 		t.Fatalf("prompt did not include active skill instructions:\n%s", prompt)
 	}
 }

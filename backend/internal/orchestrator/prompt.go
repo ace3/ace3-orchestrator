@@ -99,7 +99,7 @@ func BuildPromptWithLifecycle(agent models.Agent, task models.Task, repo *models
 
 Use only the active skills and skill instructions embedded in this prompt for this run. Do not invoke, assume, or rely on globally installed Codex or Claude skills/plugins unless the embedded active skill instructions explicitly require it and it is necessary to complete the task.
 
-Do not run or suggest shell forms that fetch remote code or bypass local review, including curl, wget, curl|sh, python -c, python3 -c, perl -e, sudo, or Docker socket access.
+Do not run or suggest shell forms that fetch remote code or bypass local review, including curl, wget, curl|sh, python -c, python3 -c, perl -e, sudo, or Docker socket access. The runner scans shell command text, so do not put those blocked literals inside heredocs, shell-written files, generated docs, or example commands.
 
 Respond ONLY with a single JSON object matching this schema. No markdown, prose, or code fences:
 {
