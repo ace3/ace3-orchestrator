@@ -527,9 +527,9 @@ func TestClaimQueuedWakeupCreatesExactlyOneLinkedRun(t *testing.T) {
 		FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=$1`)).
 		WithArgs("task-1").
 		WillReturnRows(sqlmock.NewRows([]string{"lifecycle_id", "cli_kind"}).AddRow("default", "codex"))
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO runs (id, agent_id, task_id, wakeup_id, status, cli_kind, started_at)
-		VALUES ($1,$2,$3,$4,'running',$5,now())`)).
-		WithArgs(sqlmock.AnyArg(), "agent-1", "task-1", "wake-1", "codex").
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO runs (id, agent_id, task_id, wakeup_id, status, cli_kind, started_at, attempts_group_id, attempt_index, attempt_label, attempt_model)
+		VALUES ($1,$2,$3,$4,'running',$5,now(),$6,$7,$8,$9)`)).
+		WithArgs(sqlmock.AnyArg(), "agent-1", "task-1", "wake-1", "codex", nil, nil, "", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta(`UPDATE agent_wakeups SET status='running', claimed_at=now(), updated_at=now(), run_id=$2 WHERE id=$1`)).
 		WithArgs("wake-1", sqlmock.AnyArg()).
@@ -928,8 +928,129 @@ func TestResolveQuestionInteractionRecordsAnswerAndQueuesWakeup(t *testing.T) {
 	}
 }
 
+func TestApplyTaskReviewRequestChangesCreatesFeedbackArtifact(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	now := time.Now()
+	body := "## Reviewer feedback\n- backend/api.go:42 - \"hot loop\"\n"
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1 FOR UPDATE")).
+		WithArgs("task-1").
+		WillReturnRows(taskRows(now).AddRow("task-1", "project-1", nil, "Do work", "", "in_review", "pm", nil, 0, 0, now, now))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM task_review_comments
+			WHERE task_id=$1 AND status='open'
+			ORDER BY file_path, COALESCE(line_start, 0), created_at`)).
+		WithArgs("task-1").
+		WillReturnRows(reviewCommentRows(now).AddRow("comment-1", "task-1", nil, "backend/api.go", 42, 42, "hot loop", "human:ignas", "open", now, nil))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs("task-1").
+		WillReturnRows(taskRows(now).AddRow("task-1", "project-1", nil, "Do work", "", "in_review", "pm", nil, 0, 0, now, now))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO task_artifacts (id, task_id, kind, title, body, format, metadata, created_by, run_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`)).
+		WithArgs(sqlmock.AnyArg(), "task-1", "implementation_note", "Reviewer feedback", body, "markdown", []byte(`{"source":"review_comments"}`), "human:ignas", nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM task_artifacts WHERE id=$1")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(taskArtifactRows(now).AddRow("artifact-1", "task-1", "implementation_note", "Reviewer feedback", body, "markdown", []byte(`{"source":"review_comments"}`), "human:ignas", nil, now, now))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE tasks
+		SET status=$2, last_review_decision=$3, last_review_at=now(), updated_at=now()
+		WHERE id=$1`)).
+		WithArgs("task-1", "todo", "changes_requested").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs("task-1").
+		WillReturnRows(taskRows(now).AddRow("task-1", "project-1", nil, "Do work", "", "todo", "pm", nil, 0, 0, now, now))
+
+	task, err := store.ApplyTaskReview(context.Background(), "task-1", ReviewInput{Action: "request_changes", FeedbackToAgent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "todo" {
+		t.Fatalf("got status %q, want todo", task.Status)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyTaskReviewApproveMovesTaskDone(t *testing.T) {
+	rawDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+	store := New(sqlx.NewDb(rawDB, "sqlmock"), nil)
+	now := time.Now()
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1 FOR UPDATE")).
+		WithArgs("task-1").
+		WillReturnRows(taskRows(now).AddRow("task-1", "project-1", nil, "Do work", "", "in_review", "pm", nil, 0, 0, now, now))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE tasks
+		SET status=$2, last_review_decision=$3, last_review_at=now(), updated_at=now()
+		WHERE id=$1`)).
+		WithArgs("task-1", "done", "approved").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_notify('mp_events', $1)")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM tasks WHERE id=$1")).
+		WithArgs("task-1").
+		WillReturnRows(taskRows(now).AddRow("task-1", "project-1", nil, "Do work", "", "done", "pm", nil, 0, 0, now, now))
+
+	task, err := store.ApplyTaskReview(context.Background(), "task-1", ReviewInput{Action: "approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "done" {
+		t.Fatalf("got status %q, want done", task.Status)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDraftBriefExtractsGoalAcceptanceAndTargets(t *testing.T) {
+	brief := buildDraftBrief([]DraftMessage{
+		{Role: "user", Content: "Add rate limiting to /api/login"},
+		{Role: "user", Content: "Done means login should reject excessive attempts and verify with tests in backend/internal/api/auth.go"},
+	})
+	if brief.Title != "Add rate limiting to /api/login" {
+		t.Fatalf("unexpected title %q", brief.Title)
+	}
+	if len(brief.AcceptanceCriteria) == 0 {
+		t.Fatal("expected acceptance criteria")
+	}
+	if len(brief.TargetFiles) == 0 || brief.TargetFiles[0] != "/api/login" {
+		t.Fatalf("unexpected target files: %+v", brief.TargetFiles)
+	}
+}
+
+func TestAttemptLabelUsesProvidedLabel(t *testing.T) {
+	label := attemptLabel(AttemptInput{AgentID: "backend", CLI: "codex", Model: "gpt-test", Label: "backend-fast"}, 1)
+	if label != "backend-fast" {
+		t.Fatalf("got %q, want backend-fast", label)
+	}
+}
+
 func taskRows(now time.Time) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"id", "project_id", "repo_id", "title", "description", "status", "assignee_agent_id", "parent_id", "priority", "retry_count", "created_at", "updated_at"})
+}
+
+func reviewCommentRows(now time.Time) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"id", "task_id", "run_id", "file_path", "line_start", "line_end", "body", "author", "status", "created_at", "resolved_at"})
+}
+
+func taskArtifactRows(now time.Time) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"id", "task_id", "kind", "title", "body", "format", "metadata", "created_by", "run_id", "created_at", "updated_at"})
 }
 
 func interactionRows(now time.Time) *sqlmock.Rows {

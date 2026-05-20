@@ -1422,6 +1422,164 @@ tbody tr:hover { background: var(--bg-hover); }
   font-size: 13px;
   font-weight: 600;
 }
+.review-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--bg-card);
+}
+.review-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+.review-head p,
+.review-warning {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.review-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 12px;
+}
+.review-files {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.review-files button {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  justify-content: stretch;
+  min-height: 42px;
+}
+.review-files button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-card));
+}
+.review-files span {
+  overflow-wrap: anywhere;
+}
+.review-files small {
+  color: var(--text-dim);
+}
+.review-diff {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.review-file-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.review-file-head strong {
+  overflow-wrap: anywhere;
+}
+.diff-hunk-head {
+  padding: 6px 8px;
+  color: var(--text-muted);
+  background: var(--bg-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 44px 44px 28px minmax(0, 1fr);
+  min-height: 24px;
+  align-items: stretch;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.diff-line code {
+  padding: 4px 8px;
+  white-space: pre;
+  overflow-x: auto;
+}
+.diff-gutter {
+  padding: 4px 6px;
+  color: var(--text-dim);
+  text-align: right;
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+.diff-comment-button {
+  min-width: 0;
+  width: 28px;
+  border: 0;
+  border-radius: 0;
+  opacity: 0;
+}
+.diff-line:hover .diff-comment-button {
+  opacity: 1;
+}
+.diff-add {
+  background: color-mix(in srgb, #1a7f37 14%, var(--bg));
+}
+.diff-del {
+  background: color-mix(in srgb, #cf222e 12%, var(--bg));
+}
+.review-composer {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+}
+.review-composer textarea {
+  min-height: 70px;
+}
+.review-comment {
+  display: grid;
+  gap: 6px;
+  margin: 6px 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+.review-comment.resolved {
+  opacity: .68;
+}
+.review-comment div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.review-comment span {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.review-comment p {
+  margin: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
 .empty-copy {
   margin: 0;
   color: var(--text-muted);
@@ -1434,6 +1592,78 @@ tbody tr:hover { background: var(--bg-hover); }
 
 .comment-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
 .comment-form textarea { min-height: 64px; }
+.task-builder {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(240px, .8fr);
+  gap: 16px;
+}
+.task-builder-chat {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.task-preview {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  border-left: 1px solid var(--border);
+  padding-left: 16px;
+}
+.task-preview h3,
+.task-preview p,
+.task-preview ul {
+  margin: 0;
+}
+.task-preview p,
+.task-preview li {
+  color: var(--text-muted);
+}
+.run-attempts-form {
+  display: grid;
+  gap: 12px;
+}
+.attempt-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.attempt-compare {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--bg-card);
+}
+.attempt-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.attempt-tabs button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-card));
+}
+.attempt-diff-summary {
+  display: grid;
+  gap: 6px;
+}
+.attempt-file {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.attempt-file strong {
+  overflow-wrap: anywhere;
+}
+.attempt-file span {
+  color: var(--text-dim);
+}
 
 .chat-message {
   display: grid;

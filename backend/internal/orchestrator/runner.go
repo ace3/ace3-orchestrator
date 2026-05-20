@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,6 +30,7 @@ type RunRequest struct {
 	Profile      string
 	SessionID    string
 	Model        string
+	AttemptIndex int
 	Timeout      time.Duration
 	MaxCostUSD   float64
 	OnEvent      func(level, msg string)
@@ -72,13 +75,21 @@ func (MockRunner) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 	parsed := store.AgentResponse{
 		TaskUpdates: store.TaskUpdates{
-			Status:  "done",
-			Comment: "Mock plan: acceptance criteria captured and implementation subtasks created.",
+			Status:       "done",
+			Comment:      "Mock plan: acceptance criteria captured and implementation subtasks created.",
+			KeepWorktree: req.AttemptIndex > 0,
 			CreateSubtasks: []store.Subtask{
 				{Title: "Implement backend slice", Description: "Implement the backend portion from the parent task.", AssigneeAgentID: stringPtr("backend"), InitialComment: "Created by mock PM flow."},
 				{Title: "Verify implementation", Description: "Verify the delivered behavior and record evidence.", AssigneeAgentID: stringPtr("qa"), InitialComment: "Created by mock PM flow."},
 			},
 		},
+	}
+	if req.AttemptIndex > 0 && req.WorktreePath != "" {
+		path := filepath.Join(req.WorktreePath, fmt.Sprintf("mock-attempt-%d.txt", req.AttemptIndex))
+		_ = os.WriteFile(path, []byte(fmt.Sprintf("mock attempt %d\n", req.AttemptIndex)), 0o644)
+		_ = exec.Command("git", "-C", req.WorktreePath, "add", path).Run()
+		parsed.TaskUpdates.CreateSubtasks = nil
+		parsed.TaskUpdates.Comment = fmt.Sprintf("Mock attempt %d completed with deterministic diff.", req.AttemptIndex)
 	}
 	body, _ := json.Marshal(parsed)
 	return RunResult{Stdout: string(body), Parsed: parsed, ExitCode: 0}, nil

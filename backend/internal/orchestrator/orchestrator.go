@@ -102,6 +102,26 @@ func (o *Orchestrator) EnqueueTask(ctx context.Context, taskID string) (models.A
 	})
 }
 
+func (o *Orchestrator) EnqueueTaskAttempts(ctx context.Context, taskID string, attempts []store.AttemptInput) (store.AttemptWakeupsResult, error) {
+	waiting, err := o.store.HasOpenInteraction(ctx, taskID)
+	if err != nil {
+		return store.AttemptWakeupsResult{}, err
+	}
+	if waiting {
+		return store.AttemptWakeupsResult{}, store.ErrConflict
+	}
+	return o.store.EnqueueAttemptWakeups(ctx, taskID, attempts)
+}
+
+func (o *Orchestrator) SelectAttempt(ctx context.Context, taskID, groupID, runID string) (models.Task, error) {
+	task, err := o.store.SelectAttempt(ctx, taskID, groupID, runID)
+	if err != nil {
+		return task, err
+	}
+	_ = o.cleanupOrphanWorktrees(ctx)
+	return task, nil
+}
+
 func (o *Orchestrator) worker(ctx context.Context, index int) {
 	for {
 		select {
@@ -182,7 +202,8 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		WorktreePath: worktree,
 		Profile:      deref(agent.CLIProfile),
 		SessionID:    sessionID,
-		Model:        lifecyclePrompt.CurrentModel,
+		Model:        runModel(run, lifecyclePrompt.CurrentModel),
+		AttemptIndex: runAttemptIndex(run),
 		Timeout:      o.cfg.CLITimeout,
 		MaxCostUSD:   o.cfg.RunMaxUSD,
 		OnEvent: func(level, msg string) {
@@ -196,7 +217,7 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 	if result.SessionID == nil {
 		o.store.AppendRunEvent(ctx, run.ID, "warn", "runner did not report a session id; future runs will start without CLI resume continuity")
 	}
-	shouldCleanup = !result.Parsed.TaskUpdates.KeepWorktree
+	shouldCleanup = !result.Parsed.TaskUpdates.KeepWorktree && run.AttemptsGroupID == nil
 	tx, err := o.store.DB().BeginTxx(ctx, nil)
 	if err != nil {
 		o.failRun(ctx, run, hashablePrompt(agent.RolePrompt, prompt), err)
@@ -427,6 +448,20 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func runModel(run models.Run, fallback string) string {
+	if strings.TrimSpace(run.AttemptModel) != "" {
+		return strings.TrimSpace(run.AttemptModel)
+	}
+	return fallback
+}
+
+func runAttemptIndex(run models.Run) int {
+	if run.AttemptIndex == nil {
+		return 0
+	}
+	return *run.AttemptIndex
 }
 
 func FormatSSE(kind string, payload any) string {

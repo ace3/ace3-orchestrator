@@ -233,9 +233,20 @@ func (s *Store) ClaimQueuedWakeup(ctx context.Context) (models.Run, bool, error)
 		_ = tx.Rollback()
 		return models.Run{}, false, err
 	}
+	var attempt attemptPayload
+	_ = json.Unmarshal(wakeup.PayloadJSON, &attempt)
+	if strings.TrimSpace(attempt.AttemptCLI) != "" {
+		cliKind = strings.TrimSpace(attempt.AttemptCLI)
+	}
 	runID := uuid.NewString()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO runs (id, agent_id, task_id, wakeup_id, status, cli_kind, started_at)
-		VALUES ($1,$2,$3,$4,'running',$5,now())`, runID, wakeup.AgentID, wakeup.TaskID, wakeup.ID, cliKind); err != nil {
+	var groupID *string
+	var attemptIndex *int
+	if strings.TrimSpace(attempt.AttemptsGroupID) != "" {
+		groupID = &attempt.AttemptsGroupID
+		attemptIndex = &attempt.AttemptIndex
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO runs (id, agent_id, task_id, wakeup_id, status, cli_kind, started_at, attempts_group_id, attempt_index, attempt_label, attempt_model)
+		VALUES ($1,$2,$3,$4,'running',$5,now(),$6,$7,$8,$9)`, runID, wakeup.AgentID, wakeup.TaskID, wakeup.ID, cliKind, groupID, attemptIndex, attempt.AttemptLabel, attempt.AttemptModel); err != nil {
 		_ = tx.Rollback()
 		return models.Run{}, false, err
 	}

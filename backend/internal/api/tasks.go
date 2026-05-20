@@ -104,6 +104,18 @@ func (a *API) deleteTaskArtifact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) runTask(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Attempts []store.AttemptInput `json:"attempts"`
+	}
+	if err := decodeOptionalJSON(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	if len(in.Attempts) > 0 {
+		result, err := a.orch.EnqueueTaskAttempts(r.Context(), chi.URLParam(r, "id"), in.Attempts)
+		respondCreated(w, result, err)
+		return
+	}
 	wakeup, err := a.orch.EnqueueTask(r.Context(), chi.URLParam(r, "id"))
 	respondCreated(w, wakeup, err)
 }
@@ -211,6 +223,10 @@ func (a *API) answerInteraction(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeOptionalResolution(r *http.Request, in *store.InteractionResolutionInput) error {
+	return decodeOptionalJSON(r, in)
+}
+
+func decodeOptionalJSON(r *http.Request, in any) error {
 	err := httpx.Decode(r, in)
 	if errors.Is(err, io.EOF) {
 		return nil

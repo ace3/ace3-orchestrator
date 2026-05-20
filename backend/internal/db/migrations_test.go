@@ -132,3 +132,42 @@ func TestHumanInteractionsMigrationAddsWaitingAndResolutionPayload(t *testing.T)
 		}
 	}
 }
+
+func TestTaskReviewMigrationAddsReviewStorage(t *testing.T) {
+	body, err := migrationFiles.ReadFile("migrations/0012_task_review.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	required := []string{
+		"CREATE TABLE IF NOT EXISTS task_review_comments",
+		"ADD COLUMN IF NOT EXISTS last_review_decision",
+		"ADD COLUMN IF NOT EXISTS last_review_at",
+		"CREATE INDEX IF NOT EXISTS idx_review_comments_task",
+	}
+	for _, item := range required {
+		if !strings.Contains(sql, item) {
+			t.Fatalf("task review migration missing %q", item)
+		}
+	}
+}
+
+func TestDraftsAttemptsMigrationAddsDraftAndAttemptStorage(t *testing.T) {
+	body, err := migrationFiles.ReadFile("migrations/0013_drafts_attempts.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(body)
+	required := []string{
+		"CREATE TABLE IF NOT EXISTS task_drafts",
+		"ADD COLUMN IF NOT EXISTS attempts_group_id",
+		"ADD COLUMN IF NOT EXISTS attempt_index",
+		"ADD COLUMN IF NOT EXISTS selected_run_id",
+		"CREATE INDEX IF NOT EXISTS idx_runs_attempts_group",
+	}
+	for _, item := range required {
+		if !strings.Contains(sql, item) {
+			t.Fatalf("drafts attempts migration missing %q", item)
+		}
+	}
+}

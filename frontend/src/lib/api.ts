@@ -106,6 +106,42 @@ export type Task = {
   checkout_run_id: string | null;
   execution_run_id: string | null;
   execution_state: string | null;
+  last_review_decision: "approved" | "changes_requested" | "rejected" | null;
+  last_review_at: string | null;
+  selected_run_id: string | null;
+};
+
+export type DraftMessage = {
+  role: "user" | "assistant";
+  content: string;
+  ts: string;
+};
+
+export type DraftBrief = {
+  title: string;
+  goal: string;
+  acceptance_criteria: string[];
+  target_files: string[];
+  notes: string;
+};
+
+export type TaskDraft = {
+  id: string;
+  author: string;
+  repo_id: string | null;
+  conversation: DraftMessage[];
+  preview_brief: DraftBrief | null;
+  status: "open" | "submitted" | "discarded";
+  finalized_task_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DraftTurnResult = {
+  draft: TaskDraft;
+  conversation: DraftMessage[];
+  preview_brief: DraftBrief;
+  assistant_message: string;
 };
 
 export type LifecycleStep = {
@@ -150,6 +186,52 @@ export type Comment = {
   created_at: string;
 };
 
+export type TaskReviewComment = {
+  id: string;
+  task_id: string;
+  run_id: string | null;
+  file_path: string;
+  line_start: number | null;
+  line_end: number | null;
+  body: string;
+  author: string;
+  status: "open" | "resolved";
+  created_at: string;
+  resolved_at: string | null;
+};
+
+export type DiffLine = {
+  kind: "context" | "add" | "del";
+  old_line: number | null;
+  new_line: number | null;
+  content: string;
+};
+
+export type DiffHunk = {
+  header: string;
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  lines: DiffLine[];
+};
+
+export type DiffFile = {
+  path: string;
+  old_path: string;
+  new_path: string;
+  additions: number;
+  deletions: number;
+  hunks: DiffHunk[];
+};
+
+export type TaskDiff = {
+  run_id: string | null;
+  files: DiffFile[];
+  raw: string;
+  truncated: boolean;
+};
+
 export type Run = {
   id: string;
   agent_id: string;
@@ -161,6 +243,32 @@ export type Run = {
   finished_at: string | null;
   exit_code: number | null;
   worktree_path: string | null;
+  attempts_group_id: string | null;
+  attempt_index: number | null;
+  attempt_label: string;
+  attempt_model: string;
+};
+
+export type AttemptInput = {
+  agent_id?: string;
+  cli?: "claude" | "codex";
+  model?: string;
+  label?: string;
+};
+
+export type AttemptWakeupsResult = {
+  attempts_group_id: string;
+  wakeups: AgentWakeup[];
+};
+
+export type AttemptDiff = {
+  run_id: string;
+  attempt_index: number | null;
+  attempt_label: string;
+  files: DiffFile[];
+  raw: string;
+  truncated: boolean;
+  error?: string;
 };
 
 export type AgentWakeup = {
@@ -448,14 +556,27 @@ export const listTasks = (projectId: string) => api<Task[]>(`/projects/${project
 export const getTask = (id: string) => api<Task>(`/tasks/${id}`);
 export const createTask = (projectId: string, body: Partial<Task>) => api<Task>(`/projects/${projectId}/tasks`, { method: "POST", body: JSON.stringify(body) });
 export const updateTask = (id: string, body: Partial<Task>) => api<Task>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+export const createDraft = (body: { author?: string; repo_id?: string | null }) => api<DraftTurnResult>("/drafts", { method: "POST", body: JSON.stringify(body) });
+export const draftTurn = (id: string, userMessage: string) => api<DraftTurnResult>(`/drafts/${id}/turn`, { method: "POST", body: JSON.stringify({ user_message: userMessage }) });
+export const finalizeDraft = (id: string) => api<DraftTurnResult>(`/drafts/${id}/finalize`, { method: "POST" });
+export const submitDraft = (id: string, body: { project_id: string; assignee_agent_id?: string | null; priority?: number }) => api<Task>(`/drafts/${id}/submit`, { method: "POST", body: JSON.stringify(body) });
+export const discardDraft = (id: string) => api<{ deleted: boolean }>(`/drafts/${id}`, { method: "DELETE" });
 export const listComments = (taskId: string) => api<Comment[]>(`/tasks/${taskId}/comments`);
 export const addComment = (taskId: string, body: string) => api<Comment>(`/tasks/${taskId}/comments`, { method: "POST", body: JSON.stringify({ body }) });
+export const getTaskDiff = (taskId: string) => api<TaskDiff>(`/tasks/${taskId}/diff`);
+export const listReviewComments = (taskId: string) => api<TaskReviewComment[]>(`/tasks/${taskId}/review-comments`);
+export const createReviewComment = (taskId: string, body: Partial<TaskReviewComment>) => api<TaskReviewComment>(`/tasks/${taskId}/review-comments`, { method: "POST", body: JSON.stringify(body) });
+export const updateReviewComment = (taskId: string, commentId: string, body: Partial<TaskReviewComment>) => api<TaskReviewComment>(`/tasks/${taskId}/review-comments/${commentId}`, { method: "PATCH", body: JSON.stringify(body) });
+export const reviewTask = (taskId: string, action: "approve" | "request_changes" | "reject", feedBackToAgent: boolean) => api<Task>(`/tasks/${taskId}/review`, { method: "POST", body: JSON.stringify({ action, feed_back_to_agent: feedBackToAgent }) });
 export const listTaskArtifacts = (taskId: string) => api<TaskArtifact[]>(`/tasks/${taskId}/artifacts`);
 export const createTaskArtifact = (taskId: string, body: Partial<TaskArtifact>) => api<TaskArtifact>(`/tasks/${taskId}/artifacts`, { method: "POST", body: JSON.stringify(body) });
 export const updateTaskArtifact = (id: string, body: Partial<TaskArtifact>) => api<TaskArtifact>(`/task-artifacts/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const deleteTaskArtifact = (id: string) => api<{ deleted: boolean }>(`/task-artifacts/${id}`, { method: "DELETE" });
-export const runTask = (taskId: string) => api<AgentWakeup>(`/tasks/${taskId}/run`, { method: "POST" });
+export const runTask = (taskId: string, body?: { attempts?: AttemptInput[] }) => api<AgentWakeup | AttemptWakeupsResult>(`/tasks/${taskId}/run`, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 export const listRuns = (taskId: string) => api<Run[]>(`/tasks/${taskId}/runs`);
+export const listAttempts = (taskId: string, groupId: string) => api<Run[]>(`/tasks/${taskId}/attempts/${groupId}`);
+export const getAttemptDiffs = (taskId: string, groupId: string) => api<AttemptDiff[]>(`/tasks/${taskId}/attempts/${groupId}/diffs`);
+export const selectAttempt = (taskId: string, groupId: string, runId: string) => api<Task>(`/tasks/${taskId}/attempts/${groupId}/select`, { method: "POST", body: JSON.stringify({ run_id: runId }) });
 export const listRunEvents = (runId: string, since = 0) => api<RunEvent[]>(`/runs/${runId}/events?since=${since}`);
 export const listWakeups = (taskId: string) => api<AgentWakeup[]>(`/tasks/${taskId}/wakeups`);
 export const listInteractions = (taskId: string) => api<TaskInteraction[]>(`/tasks/${taskId}/interactions`);

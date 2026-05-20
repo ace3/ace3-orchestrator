@@ -23,6 +23,7 @@ node - <<'NODE'
 const baseURL = process.env.BASE_URL;
 const token = process.env.API_TOKEN;
 const runTimeoutSeconds = Number(process.env.RUN_TIMEOUT_SECONDS) || 180;
+const { execFileSync } = require("node:child_process");
 
 const EXPECTED_ROLES = ["pm", "em", "backend", "frontend", "qa"];
 const MOCK_EVENT_MARKER = "mock runner generated deterministic acceptance response";
@@ -40,7 +41,7 @@ Acceptance:
 - curl http://localhost:8080/api/debug/health returns 200 with the JSON shape.
 - New unit test passes via go test ./...`;
 
-const PROJECT_NAME = "smoke-pipeline";
+const PROJECT_NAME = `smoke-pipeline-${Date.now()}`;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -136,6 +137,21 @@ async function ensureProject() {
   });
 }
 
+async function ensureRepo(project) {
+  const current = await api(`/api/projects/${project.id}`);
+  if (current.repos && current.repos.length > 0) return current;
+  let branch = "main";
+  try {
+    const out = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
+    if (out && out !== "HEAD") branch = out;
+  } catch { /* keep main */ }
+  await api(`/api/projects/${project.id}/repos`, {
+    method: "POST",
+    body: { local_path: process.cwd(), default_branch: branch },
+  });
+  return await api(`/api/projects/${project.id}`);
+}
+
 async function createTask(projectId) {
   return await api(`/api/projects/${projectId}/tasks`, {
     method: "POST",
@@ -149,8 +165,25 @@ async function createTask(projectId) {
   });
 }
 
+async function createReviewTask(projectId) {
+  return await api(`/api/projects/${projectId}/tasks`, {
+    method: "POST",
+    body: {
+      title: `${TASK_TITLE} review fixture`,
+      description: "Mock-mode A2 review fixture.",
+      status: "in_review",
+      assignee_agent_id: "qa",
+      priority: 1,
+    },
+  });
+}
+
 async function runAndWait(taskId, label) {
   const wakeup = await api(`/api/tasks/${taskId}/run`, { method: "POST" });
+  return await waitForWakeupRun(taskId, wakeup, label);
+}
+
+async function waitForWakeupRun(taskId, wakeup, label) {
   const deadline = Date.now() + runTimeoutSeconds * 1000;
   let run = null;
   let current = null;
@@ -187,6 +220,92 @@ async function runAndWait(taskId, label) {
   return { run: current, events };
 }
 
+async function runAttemptsAndWait(taskId, attempts) {
+  const result = await api(`/api/tasks/${taskId}/run`, { method: "POST", body: { attempts } });
+  assert(result.attempts_group_id, "attempt run response missing attempts_group_id");
+  assert(Array.isArray(result.wakeups) && result.wakeups.length === attempts.length, "attempt run response missing wakeups");
+  const completed = [];
+  for (let i = 0; i < result.wakeups.length; i++) {
+    completed.push(await waitForWakeupRun(taskId, result.wakeups[i], `attempt#${i + 1}`));
+  }
+  return { attempts_group_id: result.attempts_group_id, completed };
+}
+
+async function assertReviewFlow(projectId) {
+  const reviewTask = await createReviewTask(projectId);
+  const diff = await api(`/api/tasks/${reviewTask.id}/diff`);
+  assert(Array.isArray(diff.files) && diff.files.length === 3, `expected 3 mock diff files, got ${diff.files && diff.files.length}`);
+  const targetFile = diff.files[0];
+  const firstAdded = targetFile.hunks.flatMap((h) => h.lines).find((line) => line.kind === "add");
+  assert(firstAdded && firstAdded.new_line, "mock diff missing added line for inline comment");
+  const comment = await api(`/api/tasks/${reviewTask.id}/review-comments`, {
+    method: "POST",
+    body: {
+      run_id: diff.run_id,
+      file_path: targetFile.path,
+      line_start: firstAdded.new_line,
+      line_end: firstAdded.new_line,
+      body: "Please keep this review feedback in the next run.",
+    },
+  });
+  assert(comment.status === "open", `review comment status ${comment.status}, want open`);
+  const changed = await api(`/api/tasks/${reviewTask.id}/review`, {
+    method: "POST",
+    body: { action: "request_changes", feed_back_to_agent: true },
+  });
+  assert(changed.status === "todo", `request_changes status ${changed.status}, want todo`);
+  assert(changed.last_review_decision === "changes_requested", `last decision ${changed.last_review_decision}, want changes_requested`);
+  const artifacts = await api(`/api/tasks/${reviewTask.id}/artifacts`);
+  assert(
+    artifacts.some((artifact) => artifact.title === "Reviewer feedback" && artifact.body.includes("Please keep this review feedback")),
+    "review feedback artifact not found"
+  );
+  const approved = await api(`/api/tasks/${reviewTask.id}/review`, {
+    method: "POST",
+    body: { action: "approve", feed_back_to_agent: false },
+  });
+  assert(approved.status === "done", `approve status ${approved.status}, want done`);
+  assert(approved.last_review_decision === "approved", `last decision ${approved.last_review_decision}, want approved`);
+  console.log(`  review flow OK (${reviewTask.id})`);
+}
+
+async function assertDraftAttemptReviewFlow(project) {
+  let draft = await api("/api/drafts", { method: "POST", body: { repo_id: project.repos[0].id } });
+  draft = await api(`/api/drafts/${draft.draft.id}/turn`, { method: "POST", body: { user_message: "Add a tiny smoke fixture file for comparing parallel attempts." } });
+  draft = await api(`/api/drafts/${draft.draft.id}/turn`, { method: "POST", body: { user_message: "Done means both attempts finish, produce diffs, and the selected attempt can be reviewed." } });
+  draft = await api(`/api/drafts/${draft.draft.id}/finalize`, { method: "POST" });
+  assert(draft.preview_brief.goal && draft.preview_brief.acceptance_criteria.length > 0, "draft preview missing goal or acceptance criteria");
+  const task = await api(`/api/drafts/${draft.draft.id}/submit`, {
+    method: "POST",
+    body: { project_id: project.id, assignee_agent_id: "pm", priority: 4 },
+  });
+  assert(task.id, "draft submit did not create task");
+  const group = await runAttemptsAndWait(task.id, [
+    { agent_id: "pm", cli: "codex", label: "codex-mock" },
+    { agent_id: "pm", cli: "claude", label: "claude-mock" },
+  ]);
+  const runs = await api(`/api/tasks/${task.id}/attempts/${group.attempts_group_id}`);
+  assert(runs.length === 2, `expected 2 attempt runs, got ${runs.length}`);
+  const diffs = await api(`/api/tasks/${task.id}/attempts/${group.attempts_group_id}/diffs`);
+  assert(diffs.length === 2, `expected 2 attempt diffs, got ${diffs.length}`);
+  assert(diffs.every((diff) => Array.isArray(diff.files) && diff.files.length > 0), "attempt diff missing files");
+  const selected = await api(`/api/tasks/${task.id}/attempts/${group.attempts_group_id}/select`, {
+    method: "POST",
+    body: { run_id: runs[0].id },
+  });
+  assert(selected.status === "in_review", `selected task status ${selected.status}, want in_review`);
+  await api(`/api/tasks/${task.id}/review-comments`, {
+    method: "POST",
+    body: { run_id: runs[0].id, file_path: diffs[0].files[0].path, body: "Winner selected during smoke." },
+  });
+  const approved = await api(`/api/tasks/${task.id}/review`, {
+    method: "POST",
+    body: { action: "approve", feed_back_to_agent: false },
+  });
+  assert(approved.status === "done", `approved selected task status ${approved.status}, want done`);
+  console.log(`  draft -> attempts -> review flow OK (${task.id})`);
+}
+
 async function main() {
   console.log(`smoke-pipeline starting against ${baseURL}`);
   await waitForHealth();
@@ -195,10 +314,12 @@ async function main() {
   const agents = await ensureAgents();
   console.log(`  agents OK (${[...agents.keys()].join(", ")})`);
 
-  const project = await ensureProject();
+  let project = await ensureProject();
+  project = await ensureRepo(project);
   console.log(`  project OK (${project.id} "${project.name}")`);
 
   const projectTasksBefore = await api(`/api/projects/${project.id}/tasks`);
+  const beforeTaskIds = new Set(projectTasksBefore.map((item) => item.id));
 
   const task = await createTask(project.id);
   console.log(`  task created ${task.id} "${task.title}"`);
@@ -227,21 +348,22 @@ async function main() {
   console.log(`  run#1 produced ${childrenAfter1.length} child task(s); roles: [${[...childRoleIds].join(", ")}]`);
 
   projectTasks = await drainHeartbeat(project.id);
+  const currentRunTasks = projectTasks.filter((item) => !beforeTaskIds.has(item.id));
   const byParentAfterDrain = new Map();
-  for (const item of projectTasks) {
+  for (const item of currentRunTasks) {
     const key = item.parent_id || "";
     byParentAfterDrain.set(key, [...(byParentAfterDrain.get(key) || []), item]);
   }
   const rootDepth = treeDepth(task, byParentAfterDrain);
-  assert(projectTasks.length <= 10, `task tree grew too large: ${projectTasks.length}`);
+  assert(currentRunTasks.length <= 10, `task tree grew too large: ${currentRunTasks.length}`);
   assert(rootDepth <= 4, `task tree depth ${rootDepth} exceeds cap`);
   assert(
-    projectTasks.every((item) => item.title.includes(TASK_TITLE)),
-    `task title lost root context: ${projectTasks.map((item) => item.title).join(" | ")}`
+    currentRunTasks.every((item) => item.title.includes(TASK_TITLE)),
+    `task title lost root context: ${currentRunTasks.map((item) => item.title).join(" | ")}`
   );
   assert(
-    projectTasks.every((item) => item.status === "done"),
-    `expected steady state with all tasks done: ${projectTasks.map((item) => `${item.status}:${item.title}`).join(" | ")}`
+    currentRunTasks.every((item) => item.status === "done"),
+    `expected steady state with all current-run tasks done: ${currentRunTasks.map((item) => `${item.status}:${item.title}`).join(" | ")}`
   );
 
   // Idempotency: re-run the same task. Must not blow up and must not duplicate children explosively.
@@ -266,6 +388,9 @@ async function main() {
 
   const tasksDelta = projectTasks.length - projectTasksBefore.length;
   console.log(`  project task count: ${projectTasksBefore.length} -> ${projectTasks.length} (+${tasksDelta})`);
+
+  await assertReviewFlow(project.id);
+  await assertDraftAttemptReviewFlow(project);
 
   console.log(`smoke-pipeline e2e passed on ${baseURL} (task ${task.id})`);
 }

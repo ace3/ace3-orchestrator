@@ -444,7 +444,9 @@ func (s *Store) RecoverRunningRuns(ctx context.Context) error {
 
 func (s *Store) ActiveWorktreePaths(ctx context.Context) (map[string]bool, error) {
 	var paths []string
-	if err := s.db.SelectContext(ctx, &paths, "SELECT worktree_path FROM runs WHERE worktree_path IS NOT NULL AND status='running'"); err != nil {
+	if err := s.db.SelectContext(ctx, &paths, `SELECT DISTINCT r.worktree_path FROM runs r
+		LEFT JOIN tasks t ON t.selected_run_id=r.id OR t.checkout_run_id=r.id OR t.execution_run_id=r.id
+		WHERE r.worktree_path IS NOT NULL AND (r.status='running' OR t.id IS NOT NULL)`); err != nil {
 		return nil, err
 	}
 	out := make(map[string]bool, len(paths))

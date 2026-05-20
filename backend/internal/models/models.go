@@ -69,23 +69,38 @@ type Repo struct {
 }
 
 type Task struct {
-	ID              string         `db:"id" json:"id"`
-	ProjectID       string         `db:"project_id" json:"project_id"`
-	RepoID          *string        `db:"repo_id" json:"repo_id"`
-	Title           string         `db:"title" json:"title"`
-	Description     string         `db:"description" json:"description"`
-	Status          string         `db:"status" json:"status"`
-	AssigneeAgentID *string        `db:"assignee_agent_id" json:"assignee_agent_id"`
-	ParentID        *string        `db:"parent_id" json:"parent_id"`
-	Priority        int            `db:"priority" json:"priority"`
-	RetryCount      int            `db:"retry_count" json:"retry_count"`
-	Tags            pq.StringArray `db:"tags" json:"tags"`
-	LifecycleID     string         `db:"lifecycle_id" json:"lifecycle_id"`
-	CheckoutRunID   *string        `db:"checkout_run_id" json:"checkout_run_id"`
-	ExecutionRunID  *string        `db:"execution_run_id" json:"execution_run_id"`
-	ExecutionState  *string        `db:"execution_state" json:"execution_state"`
-	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
+	ID                 string         `db:"id" json:"id"`
+	ProjectID          string         `db:"project_id" json:"project_id"`
+	RepoID             *string        `db:"repo_id" json:"repo_id"`
+	Title              string         `db:"title" json:"title"`
+	Description        string         `db:"description" json:"description"`
+	Status             string         `db:"status" json:"status"`
+	AssigneeAgentID    *string        `db:"assignee_agent_id" json:"assignee_agent_id"`
+	ParentID           *string        `db:"parent_id" json:"parent_id"`
+	Priority           int            `db:"priority" json:"priority"`
+	RetryCount         int            `db:"retry_count" json:"retry_count"`
+	Tags               pq.StringArray `db:"tags" json:"tags"`
+	LifecycleID        string         `db:"lifecycle_id" json:"lifecycle_id"`
+	CheckoutRunID      *string        `db:"checkout_run_id" json:"checkout_run_id"`
+	ExecutionRunID     *string        `db:"execution_run_id" json:"execution_run_id"`
+	ExecutionState     *string        `db:"execution_state" json:"execution_state"`
+	LastReviewDecision *string        `db:"last_review_decision" json:"last_review_decision"`
+	LastReviewAt       *time.Time     `db:"last_review_at" json:"last_review_at"`
+	SelectedRunID      *string        `db:"selected_run_id" json:"selected_run_id"`
+	CreatedAt          time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt          time.Time      `db:"updated_at" json:"updated_at"`
+}
+
+type TaskDraft struct {
+	ID              string          `db:"id" json:"id"`
+	Author          string          `db:"author" json:"author"`
+	RepoID          *string         `db:"repo_id" json:"repo_id"`
+	Conversation    json.RawMessage `db:"conversation" json:"conversation"`
+	PreviewBrief    json.RawMessage `db:"preview_brief" json:"preview_brief"`
+	Status          string          `db:"status" json:"status"`
+	FinalizedTaskID *string         `db:"finalized_task_id" json:"finalized_task_id"`
+	CreatedAt       time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time       `db:"updated_at" json:"updated_at"`
 }
 
 type Lifecycle struct {
@@ -132,23 +147,41 @@ type Comment struct {
 	CreatedAt time.Time `db:"created_at" json:"created_at"`
 }
 
+type TaskReviewComment struct {
+	ID         string     `db:"id" json:"id"`
+	TaskID     string     `db:"task_id" json:"task_id"`
+	RunID      *string    `db:"run_id" json:"run_id"`
+	FilePath   string     `db:"file_path" json:"file_path"`
+	LineStart  *int       `db:"line_start" json:"line_start"`
+	LineEnd    *int       `db:"line_end" json:"line_end"`
+	Body       string     `db:"body" json:"body"`
+	Author     string     `db:"author" json:"author"`
+	Status     string     `db:"status" json:"status"`
+	CreatedAt  time.Time  `db:"created_at" json:"created_at"`
+	ResolvedAt *time.Time `db:"resolved_at" json:"resolved_at"`
+}
+
 type Run struct {
-	ID           string     `db:"id" json:"id"`
-	AgentID      string     `db:"agent_id" json:"agent_id"`
-	TaskID       string     `db:"task_id" json:"task_id"`
-	WakeupID     *string    `db:"wakeup_id" json:"wakeup_id"`
-	Status       string     `db:"status" json:"status"`
-	CLIKind      string     `db:"cli_kind" json:"cli_kind"`
-	StartedAt    *time.Time `db:"started_at" json:"started_at"`
-	FinishedAt   *time.Time `db:"finished_at" json:"finished_at"`
-	ExitCode     *int       `db:"exit_code" json:"exit_code"`
-	TokensIn     int        `db:"tokens_in" json:"tokens_in"`
-	TokensOut    int        `db:"tokens_out" json:"tokens_out"`
-	CostUSD      float64    `db:"cost_usd" json:"cost_usd"`
-	PromptHash   string     `db:"prompt_hash" json:"prompt_hash"`
-	WorktreePath *string    `db:"worktree_path" json:"worktree_path"`
-	LogPath      *string    `db:"log_path" json:"log_path"`
-	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	ID              string     `db:"id" json:"id"`
+	AgentID         string     `db:"agent_id" json:"agent_id"`
+	TaskID          string     `db:"task_id" json:"task_id"`
+	WakeupID        *string    `db:"wakeup_id" json:"wakeup_id"`
+	Status          string     `db:"status" json:"status"`
+	CLIKind         string     `db:"cli_kind" json:"cli_kind"`
+	StartedAt       *time.Time `db:"started_at" json:"started_at"`
+	FinishedAt      *time.Time `db:"finished_at" json:"finished_at"`
+	ExitCode        *int       `db:"exit_code" json:"exit_code"`
+	TokensIn        int        `db:"tokens_in" json:"tokens_in"`
+	TokensOut       int        `db:"tokens_out" json:"tokens_out"`
+	CostUSD         float64    `db:"cost_usd" json:"cost_usd"`
+	PromptHash      string     `db:"prompt_hash" json:"prompt_hash"`
+	WorktreePath    *string    `db:"worktree_path" json:"worktree_path"`
+	LogPath         *string    `db:"log_path" json:"log_path"`
+	AttemptsGroupID *string    `db:"attempts_group_id" json:"attempts_group_id"`
+	AttemptIndex    *int       `db:"attempt_index" json:"attempt_index"`
+	AttemptLabel    string     `db:"attempt_label" json:"attempt_label"`
+	AttemptModel    string     `db:"attempt_model" json:"attempt_model"`
+	CreatedAt       time.Time  `db:"created_at" json:"created_at"`
 }
 
 type AgentWakeup struct {

@@ -5,12 +5,18 @@ import "./styles.css";
 import {
   Agent,
   AgentWakeup,
+  AttemptDiff,
+  AttemptInput,
   AppBackupDryRun,
   AppBackupImportResult,
   AppBackupValidation,
   BackupArtifact,
   BootstrapStatus,
   Comment,
+  DiffLine,
+  DraftBrief,
+  DraftMessage,
+  DraftTurnResult,
   OrchestratorMap,
   Project,
   Run,
@@ -23,8 +29,10 @@ import {
   LifecycleStep,
   Task,
   TaskArtifact,
+  TaskDiff,
   TaskInteraction,
   TaskLiveness,
+  TaskReviewComment,
   addComment,
   addRepo,
   acceptInteraction,
@@ -32,8 +40,10 @@ import {
   checkSkillDrift,
   checkSkillSourceUpdates,
   createAgent,
+  createDraft,
   createFullBackup,
   createLifecycle,
+  createReviewComment,
   createSkillSource,
   createTaskArtifact,
   createProject,
@@ -44,15 +54,20 @@ import {
   deleteTaskArtifact,
   deleteProject,
   deleteRepo,
+  discardDraft,
+  draftTurn,
   duplicateAgent,
   downloadBackupArtifact,
   dryRunAppBackup,
   exportAppBackup,
   fullRestorePlan,
+  finalizeDraft,
+  getAttemptDiffs,
   getAgent,
   getDefaultModel,
   getLifecycle,
   getLifecycleTagVocabulary,
+  getTaskDiff,
   getTask,
   getTaskLiveness,
   getBootstrapStatus,
@@ -65,6 +80,7 @@ import {
   importAppBackup,
   importGitHubSkill,
   listAgents,
+  listAttempts,
   listBackups,
   listLifecycles,
   listComments,
@@ -76,18 +92,23 @@ import {
   listSkillSources,
   listTasks,
   listTaskArtifacts,
+  listReviewComments,
   listWakeups,
   pinSkillSource,
+  reviewTask,
   runBootstrap,
   runTask,
   rejectInteraction,
   setAgentEnabled,
   setDefaultModel,
   setToken,
+  selectAttempt,
+  submitDraft,
   subscribeEvents,
   syncSkillSource,
   updateAgent,
   updateLifecycle,
+  updateReviewComment,
   updateSkill,
   updateTaskArtifact,
   updateTask,
@@ -824,6 +845,109 @@ function TaskModal({ open, mode, initial, defaultStatus, agents, lifecycles, onC
   );
 }
 
+function TaskBuilderModal({ open, project, agents, onClose, onCreated }: {
+  open: boolean;
+  project: Project;
+  agents: Agent[];
+  onClose: () => void;
+  onCreated: (task: Task) => void;
+}) {
+  const [result, setResult] = useState<DraftTurnResult | null>(null);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setResult(null);
+    setMessage("");
+    setErr("");
+    setBusy(true);
+    createDraft({ repo_id: project.repos?.[0]?.id || null })
+      .then(setResult)
+      .catch((error) => setErr((error as Error).message))
+      .finally(() => setBusy(false));
+  }, [open, project.id]);
+
+  const brief = result?.preview_brief || emptyDraftBrief();
+  const canSubmit = !!result?.draft.id && !!brief.goal.trim() && brief.acceptance_criteria.length > 0;
+
+  async function sendTurn(event: React.FormEvent) {
+    event.preventDefault();
+    if (!result || !message.trim()) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const next = await draftTurn(result.draft.id, message.trim());
+      setResult(next);
+      setMessage("");
+    } catch (error) {
+      setErr((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    if (!result) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const finalized = await finalizeDraft(result.draft.id);
+      const task = await submitDraft(finalized.draft.id, { project_id: project.id, assignee_agent_id: agents[0]?.id || "pm", priority: 5 });
+      onCreated(task);
+    } catch (error) {
+      setErr((error as Error).message);
+      setBusy(false);
+    }
+  }
+
+  async function discard() {
+    if (result?.draft.id) {
+      await discardDraft(result.draft.id).catch(() => undefined);
+    }
+    onClose();
+  }
+
+  return <Modal
+    open={open}
+    onClose={busy ? () => undefined : discard}
+    title="Task builder"
+    footer={<>
+      <button type="button" onClick={discard} disabled={busy}>Discard</button>
+      <button type="button" onClick={submit} disabled={busy || !canSubmit}><Plus size={14} /> Submit to board</button>
+    </>}
+  >
+    <div className="task-builder">
+      {err && <Error text={err} />}
+      <div className="task-builder-chat">
+        {(result?.conversation || []).map((item, index) => (
+          <article key={`${item.ts}:${index}`} className={`chat-message ${item.role === "user" ? "from-human" : "from-agent"}`}>
+            <div className="chat-meta"><strong>{item.role === "user" ? "You" : "PM"}</strong><span>{compactDate(item.ts)}</span></div>
+            <p>{item.content}</p>
+          </article>
+        ))}
+        <form className="comment-form" onSubmit={sendTurn}>
+          <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Reply to PM" disabled={busy || !result} />
+          <button type="submit" disabled={busy || !message.trim()}><MessageSquare size={16} /> Send</button>
+        </form>
+      </div>
+      <aside className="task-preview">
+        <h3>Task Preview</h3>
+        <strong>{brief.title || "Untitled task"}</strong>
+        <p>{brief.goal || "Goal will appear here."}</p>
+        <ul>{brief.acceptance_criteria.map((item) => <li key={item}>{item}</li>)}</ul>
+        {brief.target_files.length > 0 && <div className="tag-row">{brief.target_files.map((file) => <span key={file}>{file}</span>)}</div>}
+        {brief.notes && <p>{brief.notes}</p>}
+      </aside>
+    </div>
+  </Modal>;
+}
+
+function emptyDraftBrief(): DraftBrief {
+  return { title: "", goal: "", acceptance_criteria: [], target_files: [], notes: "" };
+}
+
 function CardMenu({ task, onEdit, onDuplicate, onMove, onDelete }: {
   task: Task;
   onEdit: () => void;
@@ -904,6 +1028,7 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
   const [modalInitial, setModalInitial] = useState<Partial<Task> | undefined>(undefined);
   const [modalDefaultStatus, setModalDefaultStatus] = useState<Task["status"] | undefined>(undefined);
+  const [builderOpen, setBuilderOpen] = useState(false);
 
   useEffect(() => {
     getProject(id).then(setProject).catch((e) => setError(e.message));
@@ -1137,6 +1262,7 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
       <div className="board-toolbar-actions">
         <button type="button" onClick={onOpenProject} title="Edit project details"><FolderGit2 size={16} /> Edit project</button>
         <button type="button" onClick={async () => { await heartbeat(); setTasks(await listTasks(project.id)); }}><RefreshCw size={16} /> Heartbeat</button>
+        <button type="button" onClick={() => setBuilderOpen(true)}><MessageSquare size={16} /> Task builder</button>
         <button type="button" className="primary-button" onClick={() => openCreateModal("todo")}><Plus size={16} /> Add task</button>
       </div>
     </div>
@@ -1160,6 +1286,13 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
       lifecycles={lifecycles}
       onClose={() => setModalOpen(false)}
       onSubmit={submitModal}
+    />
+    <TaskBuilderModal
+      open={builderOpen}
+      project={project}
+      agents={agents}
+      onClose={() => setBuilderOpen(false)}
+      onCreated={(task) => { setTasks((prev) => [task, ...prev]); setBuilderOpen(false); openTask(task); }}
     />
     {selectedTask && <TaskDrawer task={selectedTask} agents={agents} onClose={closeTask} onRefresh={async () => {
       const nextTasks = await listTasks(project.id);
@@ -1342,6 +1475,14 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   const [interactionDrafts, setInteractionDrafts] = useState<Record<string, string>>({});
   const [shareStatus, setShareStatus] = useState<"" | "copied" | "error">("");
   const [shareFallbackUrl, setShareFallbackUrl] = useState("");
+  const [reviewDiff, setReviewDiff] = useState<TaskDiff | null>(null);
+  const [reviewComments, setReviewComments] = useState<TaskReviewComment[]>([]);
+  const [reviewError, setReviewError] = useState("");
+  const [selectedReviewFile, setSelectedReviewFile] = useState("");
+  const [reviewTarget, setReviewTarget] = useState<{ filePath: string; line: number | null } | null>(null);
+  const [reviewDraft, setReviewDraft] = useState("");
+  const [feedBackToAgent, setFeedBackToAgent] = useState(true);
+  const [runModalOpen, setRunModalOpen] = useState(false);
   const latestRun = runs[0];
   const hasOpenInteraction = interactions.some((interaction) => interaction.status === "open");
   const conversationItems = useMemo<ConversationItem[]>(() => {
@@ -1357,7 +1498,13 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
     listWakeups(task.id).then(setWakeups);
     listInteractions(task.id).then(setInteractions);
     getTaskLiveness(task.id).then(setLiveness);
+    refreshReview();
   }, [task.id]);
+  useEffect(() => {
+    if (!selectedReviewFile && reviewDiff?.files.length) {
+      setSelectedReviewFile(reviewDiff.files[0].path);
+    }
+  }, [reviewDiff, selectedReviewFile]);
   useEffect(() => {
     if (!latestRun) return;
     const timer = window.setInterval(() => {
@@ -1368,6 +1515,25 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
   }, [latestRun?.id, events]);
   async function refreshArtifacts() {
     setArtifacts(await listTaskArtifacts(task.id));
+  }
+  async function refreshReview() {
+    setReviewError("");
+    try {
+      const [diff, nextComments] = await Promise.all([
+        getTaskDiff(task.id),
+        listReviewComments(task.id),
+      ]);
+      setReviewDiff(diff);
+      setReviewComments(nextComments);
+    } catch (error) {
+      setReviewDiff(null);
+      try {
+        setReviewComments(await listReviewComments(task.id));
+      } catch {
+        setReviewComments([]);
+      }
+      setReviewError((error as Error).message);
+    }
   }
   async function refreshControlPlane() {
     const [nextRuns, nextWakeups, nextInteractions, nextLiveness, nextComments] = await Promise.all([
@@ -1420,6 +1586,30 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
       setShareFallbackUrl(url);
     }
   }
+  async function submitReviewComment(event: React.FormEvent) {
+    event.preventDefault();
+    if (!reviewTarget || !reviewDraft.trim()) return;
+    await createReviewComment(task.id, {
+      run_id: reviewDiff?.run_id || null,
+      file_path: reviewTarget.filePath,
+      line_start: reviewTarget.line,
+      line_end: reviewTarget.line,
+      body: reviewDraft.trim(),
+    });
+    setReviewTarget(null);
+    setReviewDraft("");
+    await refreshReview();
+  }
+  async function resolveReviewComment(commentID: string) {
+    await updateReviewComment(task.id, commentID, { status: "resolved" });
+    await refreshReview();
+  }
+  async function submitReviewDecision(action: "approve" | "request_changes" | "reject") {
+    await reviewTask(task.id, action, feedBackToAgent);
+    await refreshReview();
+    await onRefresh();
+  }
+  const reviewVisible = task.status === "in_review" || !!reviewDiff || reviewComments.length > 0 || !!task.last_review_decision;
   return <div className="drawer">
     <div className="drawer-header">
       <h2>{task.title}</h2>
@@ -1441,14 +1631,32 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
       {(task.tags || []).length > 0 && <div className="tag-row">{task.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
       <div className="toolbar">
         <button
-          onClick={async () => { await runTask(task.id); await onRefresh(); await refreshControlPlane(); }}
+          onClick={() => setRunModalOpen(true)}
           disabled={hasOpenInteraction}
-          title={hasOpenInteraction ? "Answer open interaction before running" : "Run task now"}
-        ><Play size={16} /> Run now</button>
+          title={hasOpenInteraction ? "Answer open interaction before running" : "Run task"}
+        ><Play size={16} /> Run</button>
       </div>
     </section>
     <div className="drawer-layout">
       <div className="drawer-main">
+        <AttemptComparePanel task={task} runs={runs} onRefresh={refreshControlPlane} />
+        {reviewVisible && <ReviewPanel
+          task={task}
+          diff={reviewDiff}
+          comments={reviewComments}
+          error={reviewError}
+          selectedFile={selectedReviewFile}
+          setSelectedFile={setSelectedReviewFile}
+          target={reviewTarget}
+          setTarget={setReviewTarget}
+          draft={reviewDraft}
+          setDraft={setReviewDraft}
+          feedBackToAgent={feedBackToAgent}
+          setFeedBackToAgent={setFeedBackToAgent}
+          onSubmitComment={submitReviewComment}
+          onResolveComment={resolveReviewComment}
+          onDecision={submitReviewDecision}
+        />}
         <section className="drawer-section">
           <h3>Conversation</h3>
           <div className="conversation">
@@ -1572,7 +1780,275 @@ function TaskDrawer({ task, agents, onClose, onRefresh }: { task: Task; agents: 
         </section>
       </aside>
     </div>
+    <RunAttemptsModal
+      open={runModalOpen}
+      task={task}
+      agents={agents}
+      onClose={() => setRunModalOpen(false)}
+      onStarted={async () => { setRunModalOpen(false); await onRefresh(); await refreshControlPlane(); }}
+    />
   </div>;
+}
+
+function RunAttemptsModal({ open, task, agents, onClose, onStarted }: {
+  open: boolean;
+  task: Task;
+  agents: Agent[];
+  onClose: () => void;
+  onStarted: () => Promise<void>;
+}) {
+  const defaultAgent = task.assignee_agent_id || agents[0]?.id || "pm";
+  const [count, setCount] = useState(1);
+  const [attempts, setAttempts] = useState<AttemptInput[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setCount(1);
+    setErr("");
+    setBusy(false);
+    setAttempts([{ agent_id: defaultAgent, cli: agents.find((agent) => agent.id === defaultAgent)?.cli_kind || "codex", model: "", label: "" }]);
+  }, [open, defaultAgent, agents]);
+
+  useEffect(() => {
+    setAttempts((current) => {
+      const next = [...current];
+      while (next.length < count) next.push({ agent_id: defaultAgent, cli: agents.find((agent) => agent.id === defaultAgent)?.cli_kind || "codex", model: "", label: "" });
+      return next.slice(0, count);
+    });
+  }, [count, defaultAgent, agents]);
+
+  function updateAttempt(index: number, patch: AttemptInput) {
+    setAttempts((current) => current.map((item, i) => i === index ? { ...item, ...patch } : item));
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setErr("");
+    try {
+      if (count === 1) {
+        await runTask(task.id);
+      } else {
+        await runTask(task.id, { attempts });
+      }
+      await onStarted();
+    } catch (error) {
+      setErr((error as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return <Modal
+    open={open}
+    onClose={busy ? () => undefined : onClose}
+    title="Run task"
+    footer={<>
+      <button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+      <button type="submit" form="run-attempts-form" disabled={busy}><Play size={14} /> Start</button>
+    </>}
+  >
+    <form id="run-attempts-form" className="run-attempts-form" onSubmit={submit}>
+      {err && <Error text={err} />}
+      <label className="field">
+        <span className="field-label">Attempts</span>
+        <select value={count} onChange={(event) => setCount(Number(event.target.value))}>
+          <option value={1}>1 attempt</option>
+          <option value={2}>2 attempts</option>
+          <option value={3}>3 attempts</option>
+        </select>
+      </label>
+      {attempts.map((attempt, index) => <div key={index} className="attempt-row">
+        <label className="field">
+          <span className="field-label">Agent</span>
+          <select value={attempt.agent_id || defaultAgent} onChange={(event) => updateAttempt(index, { agent_id: event.target.value, cli: agents.find((agent) => agent.id === event.target.value)?.cli_kind || attempt.cli })}>
+            {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">CLI</span>
+          <select value={attempt.cli || "codex"} onChange={(event) => updateAttempt(index, { cli: event.target.value as "claude" | "codex" })}>
+            <option value="codex">codex</option>
+            <option value="claude">claude</option>
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">Model</span>
+          <input value={attempt.model || ""} onChange={(event) => updateAttempt(index, { model: event.target.value })} placeholder="default" />
+        </label>
+        <label className="field">
+          <span className="field-label">Label</span>
+          <input value={attempt.label || ""} onChange={(event) => updateAttempt(index, { label: event.target.value })} placeholder={`Attempt ${index + 1}`} />
+        </label>
+      </div>)}
+    </form>
+  </Modal>;
+}
+
+function AttemptComparePanel({ task, runs, onRefresh }: { task: Task; runs: Run[]; onRefresh: () => Promise<void> }) {
+  const groups = Array.from(new Set(runs.map((run) => run.attempts_group_id).filter(Boolean))) as string[];
+  const groupID = groups[0];
+  const groupRuns = groupID ? runs.filter((run) => run.attempts_group_id === groupID) : [];
+  const [diffs, setDiffs] = useState<AttemptDiff[]>([]);
+  const [err, setErr] = useState("");
+  const [selectedRun, setSelectedRun] = useState("");
+
+  useEffect(() => {
+    if (!groupID) return;
+    setErr("");
+    Promise.all([listAttempts(task.id, groupID), getAttemptDiffs(task.id, groupID)])
+      .then(([, nextDiffs]) => setDiffs(nextDiffs))
+      .catch((error) => setErr((error as Error).message));
+  }, [task.id, groupID, runs.length]);
+
+  if (!groupID) return null;
+  const activeRunID = selectedRun || groupRuns[0]?.id || diffs[0]?.run_id || "";
+  const activeDiff = diffs.find((item) => item.run_id === activeRunID) || diffs[0];
+
+  return <section className="drawer-section attempt-compare">
+    <div className="review-head">
+      <div>
+        <h3>Compare attempts</h3>
+        <p>{groupRuns.length} attempt run(s) in group {shortId(groupID)}</p>
+      </div>
+      {activeRunID && <button type="button" onClick={async () => { await selectAttempt(task.id, groupID, activeRunID); await onRefresh(); }}><Check size={16} /> Pick this one</button>}
+    </div>
+    {err && <Error text={err} />}
+    <div className="attempt-tabs">
+      {groupRuns.map((run) => <button key={run.id} type="button" className={run.id === activeRunID ? "active" : ""} onClick={() => setSelectedRun(run.id)}>
+        {run.attempt_label || `Attempt ${run.attempt_index || "?"}`} · {run.status}
+      </button>)}
+    </div>
+    {activeDiff?.error && <Error text={activeDiff.error} />}
+    {activeDiff && !activeDiff.error && <div className="attempt-diff-summary">
+      {activeDiff.files.map((file) => <div key={file.path} className="attempt-file">
+        <strong>{file.path}</strong><span>+{file.additions} -{file.deletions}</span>
+      </div>)}
+    </div>}
+  </section>;
+}
+
+function ReviewPanel({
+  task,
+  diff,
+  comments,
+  error,
+  selectedFile,
+  setSelectedFile,
+  target,
+  setTarget,
+  draft,
+  setDraft,
+  feedBackToAgent,
+  setFeedBackToAgent,
+  onSubmitComment,
+  onResolveComment,
+  onDecision,
+}: {
+  task: Task;
+  diff: TaskDiff | null;
+  comments: TaskReviewComment[];
+  error: string;
+  selectedFile: string;
+  setSelectedFile: (path: string) => void;
+  target: { filePath: string; line: number | null } | null;
+  setTarget: (target: { filePath: string; line: number | null } | null) => void;
+  draft: string;
+  setDraft: (draft: string) => void;
+  feedBackToAgent: boolean;
+  setFeedBackToAgent: (value: boolean) => void;
+  onSubmitComment: (event: React.FormEvent) => Promise<void>;
+  onResolveComment: (commentID: string) => Promise<void>;
+  onDecision: (action: "approve" | "request_changes" | "reject") => Promise<void>;
+}) {
+  const files = diff?.files || [];
+  const activeFile = files.find((file) => file.path === selectedFile) || files[0];
+  const activePath = activeFile?.path || selectedFile;
+  const fileComments = comments.filter((comment) => comment.file_path === activePath);
+  return <section className="drawer-section review-panel">
+    <div className="review-head">
+      <div>
+        <h3>Review</h3>
+        <p>{task.last_review_decision ? `Last decision: ${task.last_review_decision}` : "Inspect diff and record review feedback."}</p>
+      </div>
+      <div className="review-actions">
+        <label><input type="checkbox" checked={feedBackToAgent} onChange={(event) => setFeedBackToAgent(event.target.checked)} /> Feed comments back</label>
+        <button type="button" onClick={() => onDecision("approve")}><Check size={16} /> Approve</button>
+        <button type="button" onClick={() => onDecision("request_changes")}><MessageSquare size={16} /> Request changes</button>
+        <button type="button" onClick={() => onDecision("reject")}><Trash2 size={16} /> Reject</button>
+      </div>
+    </div>
+    {error && !diff && <Error text={error} />}
+    {diff?.truncated && <p className="review-warning">Diff is truncated at 2 MB.</p>}
+    {files.length > 0 && <div className="review-layout">
+      <aside className="review-files">
+        {files.map((file) => (
+          <button key={file.path} type="button" className={file.path === activePath ? "active" : ""} onClick={() => setSelectedFile(file.path)}>
+            <span>{file.path}</span>
+            <small>+{file.additions} -{file.deletions}</small>
+          </button>
+        ))}
+      </aside>
+      <div className="review-diff">
+        {activeFile && <>
+          <div className="review-file-head">
+            <strong>{activeFile.path}</strong>
+            <button type="button" onClick={() => { setTarget({ filePath: activeFile.path, line: null }); setDraft(""); }}><MessageSquare size={14} /> File comment</button>
+          </div>
+          {target?.filePath === activeFile.path && target.line === null && <ReviewComposer draft={draft} setDraft={setDraft} onSubmit={onSubmitComment} onCancel={() => setTarget(null)} />}
+          {fileComments.filter((comment) => comment.line_start === null).map((comment) => <ReviewCommentRow key={comment.id} comment={comment} onResolve={onResolveComment} />)}
+          {activeFile.hunks.map((hunk, hunkIndex) => <div key={`${activeFile.path}:${hunkIndex}`} className="diff-hunk">
+            <div className="diff-hunk-head">{hunk.header}</div>
+            {hunk.lines.map((line, lineIndex) => {
+              const lineNumber = reviewLineNumber(line);
+              const lineKey = `${activeFile.path}:${hunkIndex}:${lineIndex}`;
+              const inlineComments = fileComments.filter((comment) => comment.line_start === lineNumber);
+              return <div key={lineKey}>
+                <div className={`diff-line diff-${line.kind}`}>
+                  <span className="diff-gutter">{line.old_line || ""}</span>
+                  <span className="diff-gutter">{line.new_line || ""}</span>
+                  <button type="button" className="diff-comment-button" onClick={() => { setTarget({ filePath: activeFile.path, line: lineNumber }); setDraft(""); }}>+</button>
+                  <code>{diffPrefix(line)}{line.content}</code>
+                </div>
+                {target?.filePath === activeFile.path && target.line === lineNumber && <ReviewComposer draft={draft} setDraft={setDraft} onSubmit={onSubmitComment} onCancel={() => setTarget(null)} />}
+                {inlineComments.map((comment) => <ReviewCommentRow key={comment.id} comment={comment} onResolve={onResolveComment} />)}
+              </div>;
+            })}
+          </div>)}
+        </>}
+      </div>
+    </div>}
+    {files.length === 0 && !error && <p className="empty-copy">No diff available yet.</p>}
+  </section>;
+}
+
+function ReviewComposer({ draft, setDraft, onSubmit, onCancel }: { draft: string; setDraft: (value: string) => void; onSubmit: (event: React.FormEvent) => Promise<void>; onCancel: () => void }) {
+  return <form className="review-composer" onSubmit={onSubmit}>
+    <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Review comment" required />
+    <div className="toolbar">
+      <button type="submit" disabled={!draft.trim()}><MessageSquare size={16} /> Save comment</button>
+      <button type="button" onClick={onCancel}>Cancel</button>
+    </div>
+  </form>;
+}
+
+function ReviewCommentRow({ comment, onResolve }: { comment: TaskReviewComment; onResolve: (commentID: string) => Promise<void> }) {
+  return <article className={`review-comment ${comment.status}`}>
+    <div><strong>{conversationAuthor(comment.author)}</strong><span>{comment.line_start ? ` line ${comment.line_start}` : " file"} · {comment.status} · {compactDate(comment.created_at)}</span></div>
+    <p>{comment.body}</p>
+    {comment.status === "open" && <button type="button" onClick={() => onResolve(comment.id)}><Check size={14} /> Resolve</button>}
+  </article>;
+}
+
+function reviewLineNumber(line: DiffLine) {
+  return line.new_line || line.old_line || null;
+}
+
+function diffPrefix(line: DiffLine) {
+  if (line.kind === "add") return "+";
+  if (line.kind === "del") return "-";
+  return " ";
 }
 
 function SkillCheckboxes({
