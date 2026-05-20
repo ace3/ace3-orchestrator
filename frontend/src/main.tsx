@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertTriangle, Bot, Boxes, Check, Copy, Database, Download, FileText, FolderGit2, GitBranch, Github, GripVertical, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, Bot, Check, Copy, Database, Download, FileText, FolderGit2, GitBranch, Github, GripVertical, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Play, Plus, RefreshCw, Save, Sun, Trash2, Upload } from "lucide-react";
 import "./styles.css";
 import {
   Agent,
@@ -258,7 +258,7 @@ function App() {
   return (
     <main>
       <aside>
-        <div className="brand"><Boxes size={22} /> mini-Paperclip</div>
+        <div className="brand"><img className="brand-mark" src="/nocturne-icon.png" alt="" /> Nocturne</div>
         {showBootstrapNav && <button className={route === "bootstrap" ? "active" : ""} onClick={() => navigate("bootstrap")}>Bootstrap</button>}
         <button className={route === "projects" || route === "project" || route === "board" ? "active" : ""} onClick={() => navigate("projects")}><FolderGit2 size={16} /> Projects</button>
         <button className={route === "agents" || route === "agent-new" || route === "agent" ? "active" : ""} onClick={() => navigate("agents")}><Bot size={16} /> Agents</button>
@@ -2803,7 +2803,7 @@ function BackupRestorePage() {
     <Error text={error} />
     <div className="backup-tabs" role="tablist" aria-label="Backup mode">
       <button type="button" className={activeTab === "full" ? "active" : ""} onClick={() => setActiveTab("full")}><Database size={15} /> Full Database</button>
-      <button type="button" className={activeTab === "app" ? "active" : ""} onClick={() => setActiveTab("app")}><FileText size={15} /> ACE3 Data</button>
+      <button type="button" className={activeTab === "app" ? "active" : ""} onClick={() => setActiveTab("app")}><FileText size={15} /> Nocturne Data</button>
     </div>
     {activeTab === "full" ? (
       <div className="backup-grid">
@@ -2850,7 +2850,7 @@ function BackupRestorePage() {
         <section className="detail-card">
           <header className="detail-card-header">
             <div>
-              <h2 className="detail-card-title">ACE3 Export</h2>
+              <h2 className="detail-card-title">Nocturne Export</h2>
               <p className="detail-card-sub">Export selected application bundles as versioned JSON.</p>
             </div>
             <button type="button" onClick={() => run("export-app", async () => { const backup = await exportAppBackup(bundles); setSelectedApp(backup.id); await refresh(); })} disabled={!!busy || bundles.length === 0}><Download size={14} /> Export</button>
@@ -2859,7 +2859,7 @@ function BackupRestorePage() {
             <div className="bundle-picker">
               {backupBundles.map((bundle) => <label key={bundle.id}><input type="checkbox" checked={bundles.includes(bundle.id)} onChange={() => toggleBundle(bundle.id)} /> {bundle.label}</label>)}
             </div>
-            <label className="upload-button"><Upload size={14} /> Upload ACE3 JSON<input type="file" accept=".json,application/json" onChange={(event) => {
+            <label className="upload-button"><Upload size={14} /> Upload Nocturne JSON<input type="file" accept=".json,application/json" onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) run("upload-app", async () => { const result = await uploadAppBackup(file); setSelectedApp(result.artifact.id); setAppValidation(result.validation); await refresh(); });
               event.currentTarget.value = "";
@@ -2883,7 +2883,7 @@ function BackupRestorePage() {
             {dryRun && <DryRunSummary dryRun={dryRun} />}
             <div className="confirm-form">
               <input value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="Type RESTORE" />
-              <button type="button" className="danger-button" disabled={!selectedApp || confirm !== "RESTORE" || !!busy} onClick={() => run("import-app", async () => setImportResult(await importAppBackup(selectedApp, bundles, confirm)))}><AlertTriangle size={14} /> Restore ACE3 data</button>
+              <button type="button" className="danger-button" disabled={!selectedApp || confirm !== "RESTORE" || !!busy} onClick={() => run("import-app", async () => setImportResult(await importAppBackup(selectedApp, bundles, confirm)))}><AlertTriangle size={14} /> Restore Nocturne data</button>
             </div>
             {importResult && <pre className="backup-output">Imported at {new Date(importResult.imported_at).toLocaleString()}{`\n`}Pre-restore backup: {importResult.pre_restore_backup.filename}</pre>}
           </div>
@@ -2910,7 +2910,7 @@ function BackupList({ artifacts, selected, onSelect, onDownload }: {
 
 function ValidationSummary({ validation }: { validation: AppBackupValidation }) {
   return <div className={validation.ok ? "backup-summary ok" : "backup-summary bad"}>
-    <strong>{validation.ok ? "Valid ACE3 export" : "Validation failed"}</strong>
+    <strong>{validation.ok ? "Valid Nocturne export" : "Validation failed"}</strong>
     <span>Effective bundles: {validation.effective_bundles.join(", ") || "none"}</span>
     {[...validation.warnings, ...validation.errors].map((message) => <em key={message}>{message}</em>)}
   </div>;

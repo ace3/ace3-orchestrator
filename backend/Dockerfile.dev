@@ -1,0 +1,13 @@
+FROM golang:1.23-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates git nodejs npm postgresql-client \
+    && go install github.com/cosmtrek/air@v1.49.0 \
+    && npm install -g @anthropic-ai/claude-code@2.1.143 @openai/codex@0.130.0 \
+    && npm cache clean --force
+
+ENV PATH="/go/bin:${PATH}"
+
+EXPOSE 8081
+CMD ["air", "-c", ".air.toml"]

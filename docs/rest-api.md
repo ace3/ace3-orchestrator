@@ -1,4 +1,4 @@
-# ACE3 Orchestrator REST API
+# Nocturne REST API
 
 All `/api/*` routes require:
 
@@ -195,7 +195,7 @@ Full database lane:
 
 The API never executes full database restore. Operators must run the returned command on the server after stopping writers and taking an out-of-band backup.
 
-ACE3 application data lane:
+Nocturne application data lane:
 
 - `POST /api/backups/app/export` creates a versioned JSON export.
 - `POST /api/backups/app/upload` accepts multipart field `backup`.
@@ -213,7 +213,7 @@ ACE3 application data lane:
 
 Bundles are `configuration`, `projects`, `tasks`, and `execution_history`.
 Partial restores are dependency-aware; missing dependency bundles fail validation
-or are included from the export. Import creates a pre-restore ACE3 JSON backup,
+or are included from the export. Import creates a pre-restore Nocturne JSON backup,
 blocks while runs or wakeups are active, uses one transaction, and normalizes
 queued/running imported execution state so old work is not restarted.
 
