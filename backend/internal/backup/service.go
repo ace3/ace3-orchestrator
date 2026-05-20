@@ -319,7 +319,7 @@ func (s *Service) ReadAppArtifact(id string) (AppExport, error) {
 		return AppExport{}, err
 	}
 	if artifact.Kind != AppKind {
-		return AppExport{}, fmt.Errorf("%w: selected artifact is not an ACE3 app export", ErrValidation)
+		return AppExport{}, fmt.Errorf("%w: selected artifact is not a Nocturne app export", ErrValidation)
 	}
 	body, err := os.ReadFile(filepath.Join(s.dir, artifact.Filename))
 	if err != nil {
@@ -327,7 +327,7 @@ func (s *Service) ReadAppArtifact(id string) (AppExport, error) {
 	}
 	var doc AppExport
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return AppExport{}, fmt.Errorf("%w: invalid ACE3 export JSON", ErrValidation)
+		return AppExport{}, fmt.Errorf("%w: invalid Nocturne export JSON", ErrValidation)
 	}
 	return doc, nil
 }
@@ -345,7 +345,7 @@ func (s *Service) ValidateApp(doc AppExport, selection []string) AppValidation {
 		errorsOut = append(errorsOut, selErr.Error())
 	}
 	if doc.Version != AppExportVersion {
-		errorsOut = append(errorsOut, fmt.Sprintf("unsupported ACE3 export version %d", doc.Version))
+		errorsOut = append(errorsOut, fmt.Sprintf("unsupported Nocturne export version %d", doc.Version))
 	}
 	if len(available) == 0 {
 		errorsOut = append(errorsOut, "export contains no known bundles")

@@ -162,7 +162,15 @@ section {
   padding: 6px 8px 14px;
   color: var(--text);
 }
-.brand svg { color: var(--accent); }
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  display: block;
+  flex: 0 0 22px;
+  border-radius: 5px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
 
 /* ---------- Sidebar footer ---------- */
 .sidebar-footer {

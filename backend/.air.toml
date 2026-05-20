@@ -1,0 +1,20 @@
+root = "."
+tmp_dir = "tmp/air"
+
+[build]
+cmd = "go build -o ./tmp/air/mini-paperclip ./cmd/mini-paperclip"
+bin = "./tmp/air/mini-paperclip"
+include_ext = ["go", "sql"]
+include_dir = ["cmd", "internal", "migrations"]
+exclude_dir = ["tmp", "vendor", "node_modules"]
+exclude_regex = ["_test\\.go"]
+delay = 1000
+stop_on_error = true
+send_interrupt = true
+kill_delay = "500ms"
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = false

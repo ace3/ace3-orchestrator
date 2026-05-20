@@ -1,13 +1,13 @@
 ---
 name: ace3-orchestrator
 description: >
-  Operate ACE3 Orchestrator / mini-Paperclip through its REST API. Use when an
+  Operate Nocturne through its REST API. Use when an
   AI agent needs to create projects or tasks, add PM/EM handoff artifacts,
   trigger heartbeat or task runs, inspect runs and logs, or manage durable task
   context for the local orchestrator.
 ---
 
-# ACE3 Orchestrator
+# Nocturne
 
 Use the REST API as the source of truth for task state and durable context.
 

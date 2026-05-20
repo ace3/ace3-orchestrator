@@ -2,6 +2,37 @@
 
 You have context-mode MCP tools available. These rules are NOT optional — they protect your context window from flooding. A single unrouted command can dump 56 KB into context and waste the entire session.
 
+## Local runtime safety
+
+Before starting any local app runtime, check the Makefile-managed runtime state:
+
+```sh
+make local-status
+```
+
+Do not start a second backend, frontend, or local Postgres stack if `make local-status` reports existing listeners, backend binaries, db Compose services, or compose-dev services. Reuse the running process when possible.
+
+There are two supported hot-reload modes:
+
+- `make local-dev` runs Postgres in Docker and backend/frontend on the host.
+- `make compose-dev` runs Postgres, backend Air, and Vite frontend in Docker Compose.
+
+If a clean host runtime is required, run:
+
+```sh
+make local-stop
+make local-dev
+```
+
+If a clean Docker Compose runtime is required, run:
+
+```sh
+make compose-dev-down
+make compose-dev
+```
+
+Use `make local-dev-cli` only when the task explicitly requires real Codex/Claude CLI execution. Prefer `make local-dev` for normal UI/API work because it uses the mock runner and avoids colliding with real CLI jobs.
+
 ## BLOCKED commands — do NOT attempt these
 
 ### curl / wget — BLOCKED

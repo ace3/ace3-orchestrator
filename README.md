@@ -1,4 +1,4 @@
-# mini-Paperclip
+# Nocturne
 
 Local multi-agent engineering orchestrator from `PRD.md`.
 
@@ -11,7 +11,7 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 
 Open `http://localhost:8080` and keep the API token from `deploy/.env` in the sidebar token field.
 
-![mini-Paperclip projects screen](docs/screenshots/projects.png)
+![Nocturne projects screen](docs/screenshots/projects.png)
 
 ## Development
 
@@ -25,28 +25,41 @@ Backend runs on `:8081`; frontend dev server proxies `/api` to it.
 
 ### Local host-run development
 
-Use this when you want to run only Postgres in Docker and run the app processes on your host.
-
-```sh
-make local-db-up
-make local-backend
-make local-frontend
-```
-
-Open `http://localhost:5173` and use API token `dev-token`.
-Backend start targets run `make local-db-check` first and stop with a clear message if the db-only Compose service is not running.
-
-To run the host backend and frontend together in one terminal:
+Use this mode when you want to run only Postgres in Docker and run the hot-reload app processes on your host.
 
 ```sh
 make local-dev
 ```
 
-`make local-backend` loads `deploy/.env.local` and runs the backend in `MP_RUNNER_MODE=mock`. This is the safe default for UI/API testing because task runs are deterministic and do not call real CLIs.
+Open `http://localhost:5173` and use API token `dev-token`.
+`make local-dev` starts the db-only Compose service, runs the backend through Air hot reload, and runs the Vite frontend. Press `Ctrl+C` to stop the frontend, backend, and database container; the Postgres volume is preserved.
+
+`make local-dev` loads `deploy/.env.local` and runs the backend in `MP_RUNNER_MODE=mock`. This is the safe default for UI/API testing because task runs are deterministic and do not call real CLIs. Air must be installed on your host; with Go 1.21, use `go install github.com/cosmtrek/air@v1.49.0`.
+
+You can still run each process separately:
+
+```sh
+make local-db-up
+make local-backend-watch
+make local-frontend
+```
+
+### Docker Compose hot-reload development
+
+Use this mode when you want Postgres, the Air backend, and the Vite frontend to all run in Docker Compose.
+
+```sh
+make compose-dev
+```
+
+Open `http://localhost:5173` and use API token `dev-token`.
+`make compose-dev` loads `deploy/.env.compose.dev`, mounts the backend and frontend source trees into containers, runs the backend with Air, and runs the frontend with Vite. Press `Ctrl+C` to stop and remove the compose-dev containers; named volumes preserve Postgres data, Go caches, frontend `node_modules`, skills cache, worktrees, and backups.
+
+Use `make local-status` before starting either development mode. If another runtime is already active, stop the relevant mode first with `make local-stop` or `make compose-dev-down`.
 
 #### Lifecycle smoke test
 
-With `make local-dev` already running in another terminal, push one task through the full PM → EM → Backend → Frontend → QA pipeline:
+With `make local-dev` or `make compose-dev` already running in another terminal, push one task through the full PM → EM → Backend → Frontend → QA pipeline:
 
 ```sh
 ./scripts/smoke-pipeline.sh
@@ -57,18 +70,10 @@ The script targets `http://127.0.0.1:18081` with token `dev-token` (override via
 To run real Codex or Claude from your host shell:
 
 ```sh
-make local-db-up
-make local-backend-cli
-make local-frontend
-```
-
-Or run both app processes together:
-
-```sh
 make local-dev-cli
 ```
 
-`make local-backend-cli` loads `deploy/.env.local.cli` and uses `MP_RUNNER_MODE=cli`. The host `codex` and/or `claude` commands must already be installed, authenticated, and available on `PATH`; the backend inherits your host environment, so no Docker credential mounts are used.
+`make local-dev-cli` loads `deploy/.env.local.cli` and uses `MP_RUNNER_MODE=cli`. The host `codex` and/or `claude` commands must already be installed, authenticated, and available on `PATH`; the backend inherits your host environment, so no Docker credential mounts are used.
 
 Local data lives in the `mini-paperclip-local_mp_local_pgdata` Docker volume. `make local-db-down` preserves the volume. If port `5432` is already in use, edit `POSTGRES_PORT` in `deploy/.env.local`; the local backend DSN uses that value. If port `8081` is already in use, edit `MP_PORT`; `make local-frontend` points Vite at that backend port.
 
@@ -101,7 +106,7 @@ The Admin UI includes `Backup & Restore`.
 
 - Full database backups run server-side with `pg_dump` and are stored under `MP_BACKUP_DIR`.
 - Full database restore is operator-run only. The UI validates a dump and generates `pg_restore` instructions, but it never executes restore from the browser.
-- ACE3 application data can be exported/imported as versioned JSON bundles. Import uses merge overwrite, creates an automatic pre-restore backup, blocks while runs or wakeups are active, and runs in one transaction.
+- Nocturne application data can be exported/imported as versioned JSON bundles. Import uses merge overwrite, creates an automatic pre-restore backup, blocks while runs or wakeups are active, and runs in one transaction.
 
 PostgreSQL backups do not include the Git/file skill cache. Keep `MP_SKILLS_CACHE_DIR` on persistent storage or recover it with skill sync after restoring the database.
 
