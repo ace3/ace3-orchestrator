@@ -1,11 +1,11 @@
 skill_sources:
   - name: verzth
     upstream_url: https://github.com/verzth/skills
-    pinned_sha: main
+    pinned_sha: f03c5e3e5ca57fdc80c517f7b32aba5a0c6be482
     kind: verzth
   - name: ace3
     upstream_url: https://github.com/ace3/skills
-    pinned_sha: main
+    pinned_sha: 55b07de777105abbd0d6b028e33001c31474f773
     kind: ace3
 
 agents:

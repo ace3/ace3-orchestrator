@@ -16,6 +16,7 @@ import (
 	"mini-paperclip/backend/internal/lifecycles"
 	"mini-paperclip/backend/internal/models"
 	"mini-paperclip/backend/internal/repoconfig"
+	"mini-paperclip/backend/internal/security"
 	"mini-paperclip/backend/internal/store"
 )
 
@@ -133,6 +134,13 @@ func (o *Orchestrator) executeRun(ctx context.Context, run models.Run) {
 		o.failRun(ctx, run, "", fmt.Errorf("runner %q is not available", run.CLIKind))
 		return
 	}
+	o.store.RecordAuditEvent(ctx, store.AuditEventInput{
+		Actor:     "system",
+		Action:    "run.start",
+		Target:    run.ID,
+		RequestID: deref(run.WakeupID),
+		Metadata:  json.RawMessage(fmt.Sprintf(`{"task_id":%q,"agent_id":%q,"cli_kind":%q}`, run.TaskID, run.AgentID, run.CLIKind)),
+	})
 	o.store.AppendRunEvent(ctx, run.ID, "info", "agent prompt source: database")
 	runSkills, err := o.runSkillSelections(ctx, agent, task)
 	if err != nil {
@@ -259,12 +267,13 @@ func (o *Orchestrator) lifecyclePromptContext(ctx context.Context, task models.T
 }
 
 func (o *Orchestrator) failRun(ctx context.Context, run models.Run, prompt string, err error) {
-	o.store.AppendRunEvent(ctx, run.ID, "error", err.Error())
+	redacted := security.RedactSensitive(err.Error())
+	o.store.AppendRunEvent(ctx, run.ID, "error", redacted)
 	_, _ = o.store.DB().ExecContext(ctx, `UPDATE tasks SET status='blocked', retry_count=retry_count+1, updated_at=now() WHERE id=$1`, run.TaskID)
-	_, _ = o.store.AddComment(ctx, run.TaskID, "system", "Run failed: "+err.Error())
+	_, _ = o.store.AddComment(ctx, run.TaskID, "system", "Run failed: "+redacted)
 	_ = o.store.UpdateRuntimeState(ctx, run, nil, nil, "error")
 	_ = o.store.FinishRun(ctx, run.ID, "error", 1, 0, 0, 0, prompt, "")
-	_ = o.store.FinishWakeupForRun(ctx, run.ID, "error", err.Error())
+	_ = o.store.FinishWakeupForRun(ctx, run.ID, "error", redacted)
 }
 
 func hashablePrompt(systemPrompt, taskPrompt string) string {

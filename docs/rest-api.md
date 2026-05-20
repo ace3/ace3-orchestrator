@@ -7,6 +7,9 @@ Authorization: Bearer $MP_API_TOKEN
 Content-Type: application/json
 ```
 
+Bearer tokens are accepted only in the `Authorization` header, including for
+the `/api/events` server-sent event stream. Query-string tokens are rejected.
+
 Errors use:
 
 ```json

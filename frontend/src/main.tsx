@@ -47,7 +47,6 @@ import {
   duplicateAgent,
   downloadBackupArtifact,
   dryRunAppBackup,
-  eventsURL,
   exportAppBackup,
   fullRestorePlan,
   getAgent,
@@ -85,6 +84,7 @@ import {
   setAgentEnabled,
   setDefaultModel,
   setToken,
+  subscribeEvents,
   syncSkillSource,
   updateAgent,
   updateLifecycle,
@@ -910,9 +910,10 @@ function BoardPage({ id, onOpenProjects, onOpenProject }: { id: string; onOpenPr
     listAgents().then(setAgents).catch((e) => setError(e.message));
     listLifecycles().then(setLifecycles).catch((e) => setError(e.message));
     listTasks(id).then(setTasks).catch((e) => setError(e.message));
-    const events = new EventSource(eventsURL());
-    events.addEventListener("mp_events", () => listTasks(id).then(setTasks).catch(() => undefined));
-    return () => events.close();
+    return subscribeEvents(
+      () => listTasks(id).then(setTasks).catch(() => undefined),
+      (e) => setError(e.message)
+    );
   }, [id]);
 
   useEffect(() => {

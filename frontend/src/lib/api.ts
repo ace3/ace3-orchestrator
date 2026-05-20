@@ -326,15 +326,11 @@ const API_BASE = resolveAPIBase();
 const TOKEN_KEY = "mini-paperclip-token";
 
 export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || "dev-token";
+  return localStorage.getItem(TOKEN_KEY) || (import.meta.env.PROD ? "" : "dev-token");
 }
 
 export function setToken(token: string) {
   localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function eventsURL() {
-  return `${API_BASE}/events?token=${encodeURIComponent(getToken())}`;
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -362,6 +358,36 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(data?.error?.message || response.statusText);
   }
   return data as T;
+}
+
+export function subscribeEvents(onEvent: () => void, onError?: (error: Error) => void) {
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      const headers = new Headers();
+      headers.set("Authorization", `Bearer ${getToken()}`);
+      const response = await fetch(`${API_BASE}/events`, { headers, signal: controller.signal });
+      if (!response.ok || !response.body) {
+        throw new Error(response.statusText || "event stream unavailable");
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() || "";
+        for (const frame of frames) {
+          if (frame.includes("event: mp_events")) onEvent();
+        }
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) onError?.(error as Error);
+    }
+  })();
+  return () => controller.abort();
 }
 
 export async function apiUpload<T>(path: string, file: File): Promise<T> {

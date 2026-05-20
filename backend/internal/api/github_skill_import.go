@@ -34,6 +34,10 @@ func (a *API) importGitHubSkillSource(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
+	if err := a.cfg.ValidateSkillSource(parsed.CloneURL, parsed.Ref); err != nil {
+		respond(w, nil, err)
+		return
+	}
 	name := strings.TrimSpace(body.Name)
 	if name == "" {
 		name = parsed.DefaultName

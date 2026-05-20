@@ -125,6 +125,7 @@ var tables = []Table{
 	{Name: "runs", Bundle: "execution_history", PK: []string{"id"}, Columns: []string{"id", "agent_id", "task_id", "wakeup_id", "status", "cli_kind", "started_at", "finished_at", "exit_code", "tokens_in", "tokens_out", "cost_usd", "prompt_hash", "worktree_path", "log_path", "created_at"}, OrderBy: "task_id, created_at"},
 	{Name: "run_events", Bundle: "execution_history", PK: []string{"id"}, Columns: []string{"id", "run_id", "ts", "level", "message"}, OrderBy: "run_id, id"},
 	{Name: "agent_runtime_state", Bundle: "execution_history", PK: []string{"agent_id", "task_id", "adapter_type"}, Columns: []string{"agent_id", "task_id", "adapter_type", "session_id", "state_json", "last_run_id", "last_run_status", "updated_at"}, OrderBy: "agent_id, task_id, adapter_type"},
+	{Name: "audit_events", Bundle: "execution_history", PK: []string{"id"}, Columns: []string{"id", "actor", "action", "target", "request_id", "ip", "metadata", "created_at"}, OrderBy: "id"},
 }
 
 var bundleOrder = []string{"configuration", "projects", "tasks", "execution_history"}

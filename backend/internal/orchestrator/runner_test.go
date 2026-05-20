@@ -51,6 +51,16 @@ func TestBlockedOutputReason(t *testing.T) {
 	}
 }
 
+func TestRunnerCommandMetadataOmitsPrompts(t *testing.T) {
+	got := runnerCommandMetadata("codex", []string{"exec", "--json", "System instructions:\nsecret system\n\nTask prompt:\nsecret task"})
+	if strings.Contains(got, "secret system") || strings.Contains(got, "secret task") {
+		t.Fatalf("metadata leaked prompt content: %s", got)
+	}
+	if !strings.Contains(got, "[prompt omitted]") {
+		t.Fatalf("metadata did not mark omitted prompt: %s", got)
+	}
+}
+
 func TestRunMetricsObserve(t *testing.T) {
 	metrics := &runMetrics{}
 	metrics.observe(`{"usage":{"input_tokens":10,"output_tokens":5},"cost_usd":0.25}`)

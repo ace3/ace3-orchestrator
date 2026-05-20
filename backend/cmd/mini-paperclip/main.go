@@ -20,6 +20,10 @@ import (
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	conn, err := db.Open(cfg.DBDSN)
 	if err != nil {
 		slog.Error("open db failed", "error", err)
@@ -32,7 +36,7 @@ func main() {
 	st := store.New(conn, cfg.RepoAllowlist, cfg.RepoPathAliases...)
 	lifecycleService := lifecycles.New(st)
 	st.SetLifecycleRouter(lifecycleService)
-	bs := bootstrap.New(st, cfg.SkillsCacheDir)
+	bs := bootstrap.New(st, cfg.SkillsCacheDir, cfg.ValidateSkillSource)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	status, err := bs.Status(ctx)
@@ -41,6 +45,10 @@ func main() {
 		os.Exit(1)
 	}
 	if status.Bootstrapped {
+		if err := bs.ValidateSources(ctx); err != nil {
+			slog.Error("validate skill sources failed", "error", err)
+			os.Exit(1)
+		}
 		if err := bs.SyncAgentDefinitions(ctx, nil); err != nil {
 			slog.Error("sync repo-defined agents failed", "error", err)
 			os.Exit(1)

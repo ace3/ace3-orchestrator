@@ -15,6 +15,7 @@ import (
 	"github.com/lib/pq"
 
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/security"
 )
 
 type TaskInput struct {
@@ -454,7 +455,7 @@ func (s *Store) ActiveWorktreePaths(ctx context.Context) (map[string]bool, error
 }
 
 func (s *Store) AppendRunEvent(ctx context.Context, runID, level, message string) {
-	_, _ = s.db.ExecContext(ctx, "INSERT INTO run_events (run_id, level, message) VALUES ($1,$2,$3)", runID, level, message)
+	_, _ = s.db.ExecContext(ctx, "INSERT INTO run_events (run_id, level, message) VALUES ($1,$2,$3)", runID, level, security.RedactSensitive(message))
 	s.Notify(ctx, "run_event", runID)
 }
 
