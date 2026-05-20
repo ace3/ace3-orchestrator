@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 
 	"mini-paperclip/backend/internal/fsutil"
 	"mini-paperclip/backend/internal/models"
+	"mini-paperclip/backend/internal/security"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -42,6 +44,35 @@ func (s *Store) SetLifecycleRouter(router lifecycleRouter) {
 
 func (s *Store) DB() *sqlx.DB {
 	return s.db
+}
+
+type AuditEventInput struct {
+	Actor     string          `json:"actor"`
+	Action    string          `json:"action"`
+	Target    string          `json:"target"`
+	RequestID string          `json:"request_id"`
+	IP        string          `json:"ip"`
+	Metadata  json.RawMessage `json:"metadata"`
+}
+
+func (s *Store) RecordAuditEvent(ctx context.Context, in AuditEventInput) {
+	metadata, err := normalizeMetadata(in.Metadata)
+	if err != nil {
+		metadata = json.RawMessage(`{}`)
+	}
+	actor := security.RedactSensitive(strings.TrimSpace(in.Actor))
+	if actor == "" {
+		actor = "unknown"
+	}
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO audit_events (actor, action, target, request_id, ip, metadata)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		actor,
+		strings.TrimSpace(in.Action),
+		strings.TrimSpace(in.Target),
+		strings.TrimSpace(in.RequestID),
+		strings.TrimSpace(in.IP),
+		[]byte(metadata),
+	)
 }
 
 func (s *Store) CountAgents(ctx context.Context) (int, error) {

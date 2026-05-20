@@ -23,3 +23,14 @@ func TestBearer(t *testing.T) {
 		t.Fatalf("got %d want %d", allowed.Code, http.StatusNoContent)
 	}
 }
+
+func TestBearerRejectsQueryToken(t *testing.T) {
+	next := Bearer("secret")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	rec := httptest.NewRecorder()
+	next.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/events?token=secret", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d want %d", rec.Code, http.StatusUnauthorized)
+	}
+}

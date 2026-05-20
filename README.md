@@ -80,12 +80,18 @@ Local data lives in the `mini-paperclip-local_mp_local_pgdata` Docker volume. `m
 ## Safety Defaults
 
 - All `/api/*` endpoints require `Authorization: Bearer $MP_API_TOKEN`.
+- Production mode is enabled with `MP_ENV=production`; startup fails if the API token or database password still uses development defaults.
+- Real Claude/Codex execution in production requires both `MP_RUNNER_MODE=cli` and `MP_ENABLE_REAL_CLI=true`.
 - Repos must be under `MP_REPO_ALLOWLIST`; the backend rejects other paths before git validation.
+- Production skill sources must use `https://github.com/...` URLs pinned to 40-character commit SHAs.
 - CLI runs are capped by `MP_CLI_TIMEOUT`, `MP_RUN_MAX_USD`, and `MP_MONTH_MAX_USD`.
 - Runner output is watched for blocked shell patterns such as `curl`, `wget`, `python -c`, `perl -e`, `sudo`, and Docker socket access.
+- Mutating API requests and runner starts write `audit_events` rows with request/action metadata and redacted actors.
 - Backend logs are JSON structured logs on stdout.
 - Set `MP_RUNNER_MODE=mock` only for local acceptance smoke tests; default `cli` runs real Claude/Codex CLIs.
 - On startup, interrupted `running` runs are marked `error` and stale worktree directories are removed.
+
+Hosted production should sit behind a trusted TLS reverse proxy or private network ingress. The app enforces bearer-token API auth, but TLS termination, network allowlisting, and operator identity are deployment responsibilities.
 
 ## Data
 

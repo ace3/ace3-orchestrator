@@ -20,12 +20,17 @@ import (
 )
 
 type Service struct {
-	store          *store.Store
-	skillsCacheDir string
+	store               *store.Store
+	skillsCacheDir      string
+	validateSkillSource func(upstreamURL, pinnedSHA string) error
 }
 
-func New(store *store.Store, skillsCacheDir string) *Service {
-	return &Service{store: store, skillsCacheDir: skillsCacheDir}
+func New(store *store.Store, skillsCacheDir string, validators ...func(string, string) error) *Service {
+	var validate func(string, string) error
+	if len(validators) > 0 {
+		validate = validators[0]
+	}
+	return &Service{store: store, skillsCacheDir: skillsCacheDir, validateSkillSource: validate}
 }
 
 type Status struct {
@@ -36,6 +41,19 @@ type Status struct {
 func (s *Service) Status(ctx context.Context) (Status, error) {
 	count, err := s.store.CountAgents(ctx)
 	return Status{Bootstrapped: count > 0, AgentsCount: count}, err
+}
+
+func (s *Service) ValidateSources(ctx context.Context) error {
+	sources, err := s.store.ListSkillSources(ctx)
+	if err != nil {
+		return err
+	}
+	for _, source := range sources {
+		if err := s.validateSource(source.UpstreamURL, source.PinnedSHA); err != nil {
+			return fmt.Errorf("skill source %q: %w", source.Name, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) Run(ctx context.Context) (Status, error) {
@@ -121,6 +139,9 @@ func (s *Service) upsertSkillSourcesFromConfig(ctx context.Context, cfg *repocon
 	for _, src := range cfg.SkillSources {
 		if byName[src.Name].ID != "" {
 			continue
+		}
+		if err := s.validateSource(src.UpstreamURL, src.PinnedSHA); err != nil {
+			return fmt.Errorf("skill source %q: %w", src.Name, err)
 		}
 		if err := s.store.UpsertSkillSource(ctx, models.SkillSource{
 			ID:          uuid.NewString(),
@@ -240,6 +261,9 @@ func (s *Service) SyncSource(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.validateSource(source.UpstreamURL, source.PinnedSHA); err != nil {
+		return err
+	}
 	target := s.sourceCachePath(source)
 	if _, err := os.Stat(filepath.Join(target, ".git")); errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -278,11 +302,25 @@ func (s *Service) SyncSource(ctx context.Context, id string) error {
 }
 
 func (s *Service) PinSource(ctx context.Context, id, sha string) (models.SkillSource, error) {
+	existing, err := s.store.GetSkillSource(ctx, id)
+	if err != nil {
+		return existing, err
+	}
+	if err := s.validateSource(existing.UpstreamURL, sha); err != nil {
+		return existing, err
+	}
 	source, err := s.store.PinSkillSource(ctx, id, sha)
 	if err != nil {
 		return source, err
 	}
 	return source, s.SyncSource(ctx, id)
+}
+
+func (s *Service) validateSource(upstreamURL, pinnedSHA string) error {
+	if s.validateSkillSource == nil {
+		return nil
+	}
+	return s.validateSkillSource(upstreamURL, pinnedSHA)
 }
 
 func (s *Service) StartUpdatePoller(ctx context.Context) {
@@ -308,6 +346,9 @@ func (s *Service) CheckUpdates(ctx context.Context) error {
 		return err
 	}
 	for _, source := range sources {
+		if err := s.validateSource(source.UpstreamURL, source.PinnedSHA); err != nil {
+			return err
+		}
 		head, err := remoteHead(ctx, source.UpstreamURL)
 		if err != nil {
 			return err

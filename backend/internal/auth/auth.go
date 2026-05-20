@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -15,10 +16,7 @@ func Bearer(token string) func(http.Handler) http.Handler {
 				return
 			}
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if got == "" {
-				got = r.URL.Query().Get("token")
-			}
-			if got != token {
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 				httpx.Error(w, http.StatusUnauthorized, "unauthorized", "valid bearer token required")
 				return
 			}

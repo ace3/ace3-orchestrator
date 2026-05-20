@@ -2,11 +2,16 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"mini-paperclip/backend/internal/auth"
 	"mini-paperclip/backend/internal/backup"
@@ -50,6 +55,7 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 	r.Get("/api/debug/health", debugHealth)
 	r.Route("/api", func(r chi.Router) {
 		r.Use(auth.Bearer(cfg.APIToken))
+		r.Use(api.auditMiddleware)
 		r.Get("/bootstrap-status", api.bootstrapStatus)
 		r.Post("/bootstrap/run", api.bootstrapRun)
 		r.Get("/backups", api.listBackups)
@@ -131,6 +137,59 @@ func NewRouter(cfg config.Config, st *store.Store, bs *bootstrap.Service, orch *
 		r.Get("/events", api.events)
 	})
 	return r
+}
+
+type auditResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *auditResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (a *API) auditMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
+		if requestID == "" {
+			requestID = uuid.NewString()
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		rec := &auditResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		metadata, _ := json.Marshal(map[string]any{"status": rec.status})
+		if a.store != nil {
+			a.store.RecordAuditEvent(r.Context(), store.AuditEventInput{
+				Actor:     bearerFingerprint(r.Header.Get("Authorization")),
+				Action:    r.Method + " " + chi.RouteContext(r.Context()).RoutePattern(),
+				Target:    r.URL.Path,
+				RequestID: requestID,
+				IP:        clientIP(r),
+				Metadata:  metadata,
+			})
+		}
+	})
+}
+
+func bearerFingerprint(header string) string {
+	token := strings.TrimPrefix(header, "Bearer ")
+	if token == "" {
+		return "bearer:missing"
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "bearer:sha256:" + hex.EncodeToString(sum[:])[:16]
+}
+
+func clientIP(r *http.Request) string {
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	}
+	return r.RemoteAddr
 }
 
 func debugHealth(w http.ResponseWriter, r *http.Request) {
@@ -312,6 +371,10 @@ func (a *API) createSkillSource(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
+	if err := a.cfg.ValidateSkillSource(in.UpstreamURL, in.PinnedSHA); err != nil {
+		respond(w, nil, err)
+		return
+	}
 	source, err := a.store.CreateSkillSource(r.Context(), in)
 	respondCreated(w, source, err)
 }
@@ -336,12 +399,21 @@ func (a *API) updateSkill(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) syncSkillSource(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	err := a.bootstrap.SyncSource(r.Context(), id)
+	source, err := a.store.GetSkillSource(r.Context(), id)
 	if err != nil {
 		respond(w, nil, err)
 		return
 	}
-	source, err := a.store.GetSkillSource(r.Context(), id)
+	if err := a.cfg.ValidateSkillSource(source.UpstreamURL, source.PinnedSHA); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	err = a.bootstrap.SyncSource(r.Context(), id)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	source, err = a.store.GetSkillSource(r.Context(), id)
 	respond(w, source, err)
 }
 
@@ -367,7 +439,16 @@ func (a *API) pinSkillSource(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	source, err := a.bootstrap.PinSource(r.Context(), chi.URLParam(r, "id"), body.SHA)
+	source, err := a.store.GetSkillSource(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	if err := a.cfg.ValidateSkillSource(source.UpstreamURL, body.SHA); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	source, err = a.bootstrap.PinSource(r.Context(), chi.URLParam(r, "id"), body.SHA)
 	respond(w, source, err)
 }
 

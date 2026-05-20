@@ -22,12 +22,17 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     env_file: .env
     depends_on:
       db:
         condition: service_healthy
     environment:
       MP_DB_DSN: postgres://mp:${POSTGRES_PASSWORD}@db:5432/mini_paperclip?sslmode=disable
+      MP_ENV: ${MP_ENV}
       MP_PORT: "8081"
       MP_HEARTBEAT_INTERVAL: ${MP_HEARTBEAT_INTERVAL}
       MP_WORKERS: ${MP_WORKERS}
@@ -42,14 +47,15 @@ services:
       MP_WORKTREES_DIR: /var/lib/mini-paperclip/worktrees
       MP_BACKUP_DIR: /var/lib/mini-paperclip/backups
       MP_RUNNER_MODE: ${MP_RUNNER_MODE}
+      MP_ENABLE_REAL_CLI: ${MP_ENABLE_REAL_CLI}
       MP_API_TOKEN: ${MP_API_TOKEN}
     volumes:
       - mp_skills_cache:/var/lib/mini-paperclip/skills-cache
       - mp_worktrees:/var/lib/mini-paperclip/worktrees
       - mp_backups:/var/lib/mini-paperclip/backups
       - ${HOST_CODE_DIR}:/host/code:rw
-      - ${HOST_CLAUDE_DIR}:/root/.claude:ro
-      - ${HOST_CODEX_DIR}:/root/.config/codex:ro
+      - ${HOST_CLAUDE_DIR}:/home/app/.claude:ro
+      - ${HOST_CODEX_DIR}:/home/app/.config/codex:ro
 
   frontend:
     build:

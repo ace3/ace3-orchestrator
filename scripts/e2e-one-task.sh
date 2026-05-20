@@ -35,6 +35,7 @@ NODE
 cat >"${ENV_FILE}" <<EOF
 POSTGRES_PASSWORD=mp_e2e_password
 MP_API_TOKEN=${API_TOKEN}
+MP_ENV=development
 MP_PUBLIC_PORT=${PUBLIC_PORT}
 MP_HEARTBEAT_INTERVAL=3600s
 MP_WORKERS=1
@@ -43,6 +44,7 @@ MP_CLI_TIMEOUT=60s
 MP_RUN_MAX_USD=1.00
 MP_MONTH_MAX_USD=100.00
 MP_RUNNER_MODE=mock
+MP_ENABLE_REAL_CLI=false
 MP_REPO_ALLOWLIST=/host/code
 HOST_CODE_DIR=${TMP_DIR}/code
 HOST_CLAUDE_DIR=${TMP_DIR}/claude
@@ -116,10 +118,22 @@ async function createAgent(role, name) {
 async function main() {
   await waitForHealth();
 
+  const pm = await createAgent("pm", "E2E PM Agent");
   const backend = await createAgent("backend", "E2E Backend Agent");
   const qa = await createAgent("qa", "E2E QA Agent");
+  assert(pm.id !== "pm", "pm agent should use generated id");
   assert(backend.id !== "backend", "backend agent should use generated id");
   assert(qa.id !== "qa", "qa agent should use generated id");
+  await api("/api/lifecycles", {
+    method: "POST",
+    body: {
+      id: "default",
+      description: "E2E single-agent lifecycle",
+      steps: [
+        { agent_id: pm.id, cli_kind: "codex", skip_when: [], include_when: [], model_id: "" },
+      ],
+    },
+  });
 
   const project = await api("/api/projects", {
     method: "POST",
@@ -137,11 +151,11 @@ async function main() {
       title: "E2E one-task lifecycle",
       description: "Verify role assignees canonicalize and mock runner creates child tasks.",
       status: "todo",
-      assignee_agent_id: "backend",
+      assignee_agent_id: "pm",
       priority: 10,
     },
   });
-  assert(task.assignee_agent_id === backend.id, `parent assignee was not canonicalized: ${task.assignee_agent_id}`);
+  assert(task.assignee_agent_id === pm.id, `parent assignee was not canonicalized: ${task.assignee_agent_id}`);
 
   const wakeup = await api(`/api/tasks/${task.id}/run`, { method: "POST" });
   let run = null;

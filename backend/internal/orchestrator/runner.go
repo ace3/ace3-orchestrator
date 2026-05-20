@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"mini-paperclip/backend/internal/security"
 	"mini-paperclip/backend/internal/store"
 )
 
@@ -123,6 +124,9 @@ func runCommand(ctx context.Context, binary string, args []string, req RunReques
 	if req.WorktreePath != "" {
 		cmd.Dir = req.WorktreePath
 	}
+	if req.OnEvent != nil {
+		req.OnEvent("info", "runner command: "+runnerCommandMetadata(binary, args))
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return RunResult{}, err
@@ -176,7 +180,7 @@ func stream(r io.Reader, out *bytes.Buffer, level string, req RunRequest, metric
 			out.WriteByte('\n')
 		}
 		if req.OnEvent != nil && strings.TrimSpace(line) != "" {
-			req.OnEvent(level, line)
+			req.OnEvent(level, security.RedactSensitive(line))
 		}
 		if reason := blockedOutputReason(line); reason != "" {
 			select {
@@ -196,6 +200,25 @@ func stream(r io.Reader, out *bytes.Buffer, level string, req RunRequest, metric
 			return
 		}
 	}
+}
+
+func runnerCommandMetadata(binary string, args []string) string {
+	safe := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--append-system-prompt":
+			safe = append(safe, arg, "[system prompt omitted]")
+			i++
+		default:
+			if strings.HasPrefix(arg, "System instructions:\n") {
+				safe = append(safe, "[prompt omitted]")
+				continue
+			}
+			safe = append(safe, arg)
+		}
+	}
+	return binary + " " + strings.Join(safe, " ")
 }
 
 func blockedOutputReason(line string) string {
